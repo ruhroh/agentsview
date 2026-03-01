@@ -3,7 +3,7 @@ use std::error::Error;
 use std::ffi::OsString;
 use std::fs;
 use std::io;
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::{Ipv4Addr, SocketAddrV4, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -237,20 +237,13 @@ fn normalize_env_key(key: &std::ffi::OsStr, case_insensitive_keys: bool) -> OsSt
 
 fn run_login_shell_env(shell: &str, timeout: Duration) -> Option<Vec<u8>> {
     let shell_arg = shell_login_env_flag(shell);
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?
-        .as_nanos();
-    let stdout_path = std::env::temp_dir().join(format!(
-        "agentsview-login-env-{stamp}-{}",
-        std::process::id()
-    ));
-    let stdout_file = fs::File::create(&stdout_path).ok()?;
+    let mut stdout_capture = tempfile::tempfile().ok()?;
+    let stdout_writer = stdout_capture.try_clone().ok()?;
     let mut child = std::process::Command::new(shell)
         .args([shell_arg, "env -0"])
         .stdin(Stdio::null())
         .stderr(Stdio::null())
-        .stdout(Stdio::from(stdout_file))
+        .stdout(Stdio::from(stdout_writer))
         .spawn()
         .ok()?;
 
@@ -264,7 +257,6 @@ fn run_login_shell_env(shell: &str, timeout: Duration) -> Option<Vec<u8>> {
                 if Instant::now() >= deadline {
                     let _ = child.kill();
                     let _ = child.wait();
-                    let _ = fs::remove_file(&stdout_path);
                     return None;
                 }
                 thread::sleep(Duration::from_millis(25));
@@ -273,19 +265,22 @@ fn run_login_shell_env(shell: &str, timeout: Duration) -> Option<Vec<u8>> {
                 eprintln!("[agentsview] login shell probe try_wait failed: {err}");
                 let _ = child.kill();
                 let _ = child.wait();
-                let _ = fs::remove_file(&stdout_path);
                 return None;
             }
         }
     };
     if !status.success() {
-        let _ = fs::remove_file(&stdout_path);
         return None;
     }
 
-    let output = fs::read(&stdout_path).ok();
-    let _ = fs::remove_file(&stdout_path);
-    output
+    if stdout_capture.seek(SeekFrom::Start(0)).is_err() {
+        return None;
+    }
+    let mut output = Vec::new();
+    if stdout_capture.read_to_end(&mut output).is_err() {
+        return None;
+    }
+    Some(output)
 }
 
 fn shell_login_env_flag(shell: &str) -> &'static str {
@@ -891,5 +886,14 @@ mod tests {
             elapsed < Duration::from_secs(1),
             "timeout path took too long: {elapsed:?}"
         );
+    }
+
+    #[test]
+    fn run_login_shell_env_returns_none_when_shell_missing() {
+        let output = run_login_shell_env(
+            "agentsview-missing-shell-binary",
+            Duration::from_millis(100),
+        );
+        assert!(output.is_none(), "missing shell should return None");
     }
 }
