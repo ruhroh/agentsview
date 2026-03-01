@@ -8,7 +8,7 @@ use std::net::{Ipv4Addr, SocketAddrV4, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -23,7 +23,6 @@ const PREFERRED_PORT: u16 = 8080;
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(125);
 const LOGIN_SHELL_ENV_TIMEOUT: Duration = Duration::from_secs(3);
-const LOGIN_SHELL_READER_TIMEOUT: Duration = Duration::from_millis(300);
 
 type DynError = Box<dyn Error>;
 type CommandRx = Receiver<CommandEvent>;
@@ -238,19 +237,22 @@ fn normalize_env_key(key: &std::ffi::OsStr, case_insensitive_keys: bool) -> OsSt
 
 fn run_login_shell_env(shell: &str, timeout: Duration) -> Option<Vec<u8>> {
     let shell_arg = shell_login_env_flag(shell);
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    let stdout_path = std::env::temp_dir().join(format!(
+        "agentsview-login-env-{stamp}-{}",
+        std::process::id()
+    ));
+    let stdout_file = fs::File::create(&stdout_path).ok()?;
     let mut child = std::process::Command::new(shell)
         .args([shell_arg, "env -0"])
         .stdin(Stdio::null())
         .stderr(Stdio::null())
-        .stdout(Stdio::piped())
+        .stdout(Stdio::from(stdout_file))
         .spawn()
         .ok()?;
-    let mut stdout = child.stdout.take()?;
-    let (tx, rx) = mpsc::sync_channel(1);
-    thread::spawn(move || {
-        let mut out = Vec::new();
-        let _ = tx.send(stdout.read_to_end(&mut out).ok().map(|_| out));
-    });
 
     let deadline = Instant::now() + timeout;
     let status = loop {
@@ -262,7 +264,7 @@ fn run_login_shell_env(shell: &str, timeout: Duration) -> Option<Vec<u8>> {
                 if Instant::now() >= deadline {
                     let _ = child.kill();
                     let _ = child.wait();
-                    let _ = rx.recv_timeout(LOGIN_SHELL_READER_TIMEOUT);
+                    let _ = fs::remove_file(&stdout_path);
                     return None;
                 }
                 thread::sleep(Duration::from_millis(25));
@@ -271,17 +273,19 @@ fn run_login_shell_env(shell: &str, timeout: Duration) -> Option<Vec<u8>> {
                 eprintln!("[agentsview] login shell probe try_wait failed: {err}");
                 let _ = child.kill();
                 let _ = child.wait();
-                let _ = rx.recv_timeout(LOGIN_SHELL_READER_TIMEOUT);
+                let _ = fs::remove_file(&stdout_path);
                 return None;
             }
         }
     };
     if !status.success() {
-        let _ = rx.recv_timeout(LOGIN_SHELL_READER_TIMEOUT);
+        let _ = fs::remove_file(&stdout_path);
         return None;
     }
 
-    rx.recv_timeout(LOGIN_SHELL_READER_TIMEOUT).ok().flatten()
+    let output = fs::read(&stdout_path).ok();
+    let _ = fs::remove_file(&stdout_path);
+    output
 }
 
 fn shell_login_env_flag(shell: &str) -> &'static str {
