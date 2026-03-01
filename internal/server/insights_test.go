@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -21,6 +22,40 @@ import (
 
 type listInsightsResponse struct {
 	Insights []db.Insight `json:"insights"`
+}
+
+type failFirstWriteRecorder struct {
+	header  http.Header
+	writes  int
+	status  int
+	flushed bool
+}
+
+func newFailFirstWriteRecorder() *failFirstWriteRecorder {
+	return &failFirstWriteRecorder{
+		header: make(http.Header),
+		status: http.StatusOK,
+	}
+}
+
+func (f *failFirstWriteRecorder) Header() http.Header {
+	return f.header
+}
+
+func (f *failFirstWriteRecorder) WriteHeader(statusCode int) {
+	f.status = statusCode
+}
+
+func (f *failFirstWriteRecorder) Write(b []byte) (int, error) {
+	f.writes++
+	if f.writes == 1 {
+		return 0, io.ErrClosedPipe
+	}
+	return len(b), nil
+}
+
+func (f *failFirstWriteRecorder) Flush() {
+	f.flushed = true
 }
 
 func TestListInsights(t *testing.T) {
@@ -164,6 +199,33 @@ func TestGenerateInsight_DefaultAgent(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	assertBodyContains(t, w, "event: error")
 	assertBodyContains(t, w, "claude generation failed")
+}
+
+func TestGenerateInsight_InitialStatusWriteFailureSkipsGeneration(t *testing.T) {
+	var called atomic.Bool
+	te := setupWithServerOpts(t, []server.Option{
+		server.WithGenerateStreamFunc(func(
+			_ context.Context, _ string, _ string, _ insight.LogFunc,
+		) (insight.Result, error) {
+			called.Store(true)
+			return insight.Result{Content: "should not run"}, nil
+		}),
+	})
+
+	req := httptest.NewRequest(
+		http.MethodPost, "/api/v1/insights/generate",
+		strings.NewReader(
+			`{"type":"daily_activity","date_from":"2025-01-15","date_to":"2025-01-15","agent":"claude"}`,
+		),
+	)
+	req.Header.Set("Content-Type", "application/json")
+
+	w := newFailFirstWriteRecorder()
+	te.handler.ServeHTTP(w, req)
+
+	if called.Load() {
+		t.Fatalf("generation should not run when initial SSE status write fails")
+	}
 }
 
 func TestGenerateInsight_StreamsLogs(t *testing.T) {

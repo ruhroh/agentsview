@@ -5,7 +5,7 @@ use std::fs;
 use std::io;
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddrV4, TcpStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -13,7 +13,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use tauri::async_runtime::Receiver;
-use tauri::{App, AppHandle, Manager, RunEvent, WebviewWindow};
+use tauri::plugin::Builder as PluginBuilder;
+use tauri::{App, AppHandle, Manager, RunEvent, Url, WebviewWindow};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
@@ -36,6 +37,7 @@ struct SidecarState {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(init_navigation_guard_plugin())
         .manage(SidecarState::default())
         .setup(launch_backend)
         .build(tauri::generate_context!())
@@ -76,6 +78,31 @@ fn spawn_sidecar(app: &App) -> Result<(CommandRx, CommandChild), DynError> {
         .spawn()?)
 }
 
+fn init_navigation_guard_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    PluginBuilder::new("navigation-guard")
+        .on_navigation(|webview, url| {
+            if is_allowed_navigation_url(url) {
+                return true;
+            }
+            if let Err(err) = webview
+                .app_handle()
+                .shell()
+                .open(url.as_str().to_string(), None)
+            {
+                eprintln!("[agentsview] failed to open external URL in system browser: {err}");
+            }
+            false
+        })
+        .build()
+}
+
+fn is_allowed_navigation_url(url: &Url) -> bool {
+    if url.scheme() == "tauri" && url.host_str() == Some("localhost") {
+        return true;
+    }
+    url.scheme() == "http" && url.host_str() == Some(HOST)
+}
+
 // sidecar_env returns the environment passed to the backend
 // sidecar process. It merges the app environment with
 // login-shell variables so desktop launches inherit zshrc/bash
@@ -102,18 +129,24 @@ fn sidecar_env() -> Vec<(OsString, OsString)> {
 // read_login_shell_env invokes the user's login shell and
 // parses NUL-delimited env output (`env -0`).
 fn read_login_shell_env() -> Option<Vec<(OsString, OsString)>> {
-    let default_shell = if cfg!(target_os = "macos") {
-        "/bin/zsh"
-    } else {
-        "/bin/sh"
-    };
+    let default_shell = default_login_shell();
     let shell = std::env::var("SHELL")
         .ok()
         .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| default_shell.to_string());
+        .unwrap_or(default_shell);
 
     let stdout = run_login_shell_env(shell.as_str(), LOGIN_SHELL_ENV_TIMEOUT)?;
     Some(parse_nul_env(stdout.as_slice()))
+}
+
+fn default_login_shell() -> String {
+    if cfg!(target_os = "macos") {
+        return "/bin/zsh".to_string();
+    }
+    if Path::new("/bin/bash").exists() {
+        return "/bin/bash".to_string();
+    }
+    "/bin/sh".to_string()
 }
 
 // read_desktop_env_file parses ~/.agentsview/desktop.env as
@@ -179,8 +212,9 @@ fn normalize_env_key(key: &std::ffi::OsStr, case_insensitive_keys: bool) -> OsSt
 }
 
 fn run_login_shell_env(shell: &str, timeout: Duration) -> Option<Vec<u8>> {
+    let shell_arg = shell_login_env_flag(shell);
     let mut child = std::process::Command::new(shell)
-        .args(["-lic", "env -0"])
+        .args([shell_arg, "env -0"])
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .stdout(Stdio::piped())
@@ -216,6 +250,18 @@ fn run_login_shell_env(shell: &str, timeout: Duration) -> Option<Vec<u8>> {
     }
 
     rx.recv_timeout(LOGIN_SHELL_READER_TIMEOUT).ok().flatten()
+}
+
+fn shell_login_env_flag(shell: &str) -> &'static str {
+    let name = Path::new(shell)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    match name {
+        "sh" | "dash" | "busybox" => "-c",
+        "fish" => "-lc",
+        _ => "-lic",
+    }
 }
 
 fn parse_nul_env(content: &[u8]) -> Vec<(OsString, OsString)> {
@@ -525,6 +571,31 @@ mod tests {
             parse_listening_port_from_stdout_buffer(&mut buf, "080 (started in 1.2s)\n"),
             Some(18080)
         );
+    }
+
+    #[test]
+    fn is_allowed_navigation_url_allows_local_only() {
+        let tauri_url = Url::parse("tauri://localhost/index.html").expect("valid tauri url");
+        assert!(is_allowed_navigation_url(&tauri_url));
+
+        let local_backend = Url::parse("http://127.0.0.1:18080/").expect("valid localhost url");
+        assert!(is_allowed_navigation_url(&local_backend));
+
+        let remote = Url::parse("https://example.com/").expect("valid remote url");
+        assert!(!is_allowed_navigation_url(&remote));
+
+        let localhost_name =
+            Url::parse("http://localhost:18080/").expect("valid localhost-name url");
+        assert!(!is_allowed_navigation_url(&localhost_name));
+    }
+
+    #[test]
+    fn shell_login_env_flag_matches_shell_compatibility() {
+        assert_eq!(shell_login_env_flag("/bin/sh"), "-c");
+        assert_eq!(shell_login_env_flag("/usr/bin/dash"), "-c");
+        assert_eq!(shell_login_env_flag("/opt/homebrew/bin/fish"), "-lc");
+        assert_eq!(shell_login_env_flag("/bin/bash"), "-lic");
+        assert_eq!(shell_login_env_flag("/bin/zsh"), "-lic");
     }
 
     #[test]

@@ -188,9 +188,11 @@ func (s *Server) handleGenerateInsight(
 		return stream.SendJSON(event, v)
 	}
 
-	sendJSON("status", map[string]string{
+	if !sendJSON("status", map[string]string{
 		"phase": "generating",
-	})
+	}) {
+		return
+	}
 
 	prompt, err := insight.BuildPrompt(
 		r.Context(), s.db, insight.GenerateRequest{
