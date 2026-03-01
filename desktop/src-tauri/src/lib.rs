@@ -92,12 +92,19 @@ fn init_navigation_guard_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlug
             if is_allowed_navigation_url(url, backend_port) {
                 return true;
             }
-            if let Err(err) = webview
-                .app_handle()
-                .shell()
-                .open(url.as_str().to_string(), None)
-            {
-                eprintln!("[agentsview] failed to open external URL in system browser: {err}");
+            if is_allowed_external_open_url(url) {
+                if let Err(err) = webview
+                    .app_handle()
+                    .shell()
+                    .open(url.as_str().to_string(), None)
+                {
+                    eprintln!("[agentsview] failed to open external URL in system browser: {err}");
+                }
+            } else {
+                eprintln!(
+                    "[agentsview] blocked disallowed external URL scheme: {}",
+                    url.as_str()
+                );
             }
             false
         })
@@ -115,6 +122,10 @@ fn is_allowed_navigation_url(url: &Url, backend_port: Option<u16>) -> bool {
         (url.port(), backend_port),
         (Some(navigated_port), Some(sidecar_port)) if navigated_port == sidecar_port
     )
+}
+
+fn is_allowed_external_open_url(url: &Url) -> bool {
+    matches!(url.scheme(), "http" | "https" | "mailto")
 }
 
 // sidecar_env returns the environment passed to the backend
@@ -243,11 +254,11 @@ fn run_login_shell_env(shell: &str, timeout: Duration) -> Option<Vec<u8>> {
 
     let deadline = Instant::now() + timeout;
     let status = loop {
-        match child.try_wait().ok()? {
-            Some(status) => {
+        match child.try_wait() {
+            Ok(Some(status)) => {
                 break status;
             }
-            None => {
+            Ok(None) => {
                 if Instant::now() >= deadline {
                     let _ = child.kill();
                     let _ = child.wait();
@@ -255,6 +266,13 @@ fn run_login_shell_env(shell: &str, timeout: Duration) -> Option<Vec<u8>> {
                     return None;
                 }
                 thread::sleep(Duration::from_millis(25));
+            }
+            Err(err) => {
+                eprintln!("[agentsview] login shell probe try_wait failed: {err}");
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = rx.recv_timeout(LOGIN_SHELL_READER_TIMEOUT);
+                return None;
             }
         }
     };
@@ -627,6 +645,24 @@ mod tests {
         let localhost_name =
             Url::parse("http://localhost:18080/").expect("valid localhost-name url");
         assert!(!is_allowed_navigation_url(&localhost_name, Some(18080)));
+    }
+
+    #[test]
+    fn is_allowed_external_open_url_limits_schemes() {
+        let https = Url::parse("https://example.com").expect("valid https url");
+        assert!(is_allowed_external_open_url(&https));
+
+        let http = Url::parse("http://example.com").expect("valid http url");
+        assert!(is_allowed_external_open_url(&http));
+
+        let mailto = Url::parse("mailto:test@example.com").expect("valid mailto url");
+        assert!(is_allowed_external_open_url(&mailto));
+
+        let file = Url::parse("file:///tmp/foo").expect("valid file url");
+        assert!(!is_allowed_external_open_url(&file));
+
+        let custom = Url::parse("custom-scheme://foo").expect("valid custom url");
+        assert!(!is_allowed_external_open_url(&custom));
     }
 
     #[test]
