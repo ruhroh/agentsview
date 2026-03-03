@@ -486,6 +486,7 @@ func (e *Engine) ResyncAll(
 		log.Printf("resync: open temp db: %v", err)
 		restoreSkipCache()
 		stats := SyncStats{
+			Aborted: true,
 			Warnings: []string{
 				"resync failed: " + err.Error(),
 			},
@@ -523,6 +524,7 @@ func (e *Engine) ResyncAll(
 		newDB.Close()
 		removeTempDB(tempPath)
 		restoreSkipCache()
+		stats.Aborted = true
 		stats.Warnings = append(stats.Warnings, fmt.Sprintf(
 			"resync aborted: %d synced, %d failed",
 			stats.Synced, stats.Failed,
@@ -540,6 +542,7 @@ func (e *Engine) ResyncAll(
 	// after the copy.
 	if err := origDB.CloseConnections(); err != nil {
 		log.Printf("resync: close orig db: %v", err)
+		stats.Aborted = true
 		stats.Warnings = append(stats.Warnings,
 			"close before swap failed: "+err.Error(),
 		)
@@ -562,6 +565,7 @@ func (e *Engine) ResyncAll(
 	tInsights := time.Now()
 	if err := newDB.CopyInsightsFrom(origPath); err != nil {
 		log.Printf("resync: copy insights: %v", err)
+		stats.Aborted = true
 		stats.Warnings = append(stats.Warnings,
 			"insights copy failed, aborting swap: "+
 				err.Error(),
@@ -588,6 +592,7 @@ func (e *Engine) ResyncAll(
 	orphaned, err := newDB.CopyOrphanedDataFrom(origPath)
 	if err != nil {
 		log.Printf("resync: copy orphaned sessions: %v", err)
+		stats.Aborted = true
 		stats.Warnings = append(stats.Warnings,
 			"orphaned session copy failed, aborting swap: "+
 				err.Error(),
@@ -612,6 +617,7 @@ func (e *Engine) ResyncAll(
 
 	if err := os.Rename(tempPath, origPath); err != nil {
 		log.Printf("resync: rename temp db: %v", err)
+		stats.Aborted = true
 		stats.Warnings = append(stats.Warnings,
 			"resync swap failed: "+err.Error(),
 		)

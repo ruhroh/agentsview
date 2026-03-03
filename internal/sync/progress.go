@@ -44,6 +44,7 @@ type SyncStats struct {
 	Failed         int      `json:"failed"`
 	OrphanedCopied int      `json:"orphaned_copied,omitempty"`
 	Warnings       []string `json:"warnings,omitempty"`
+	Aborted        bool     `json:"aborted,omitempty"`
 
 	filesOK         int // unexported: file-level success counter
 	filesDiscovered int // file-based total, excludes OpenCode

@@ -314,7 +314,7 @@ func runInitialResync(engine *sync.Engine) {
 	// If resync was aborted (swap didn't happen), fall back
 	// to a normal incremental sync so the server starts with
 	// current file data rather than a potentially stale DB.
-	if len(stats.Warnings) > 0 {
+	if stats.Aborted {
 		fmt.Println("Resync incomplete, running incremental sync...")
 		t = time.Now()
 		fallback := engine.SyncAll(printSyncProgress)
