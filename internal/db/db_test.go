@@ -1045,6 +1045,12 @@ func TestStatsEarliestFallsBackToCreatedAt(t *testing.T) {
 				" should fall back to created_at",
 		)
 	}
+	if *stats.EarliestSession == "" {
+		t.Fatal(
+			"earliest_session is empty string;" +
+				" NULLIF should have converted '' to NULL",
+		)
+	}
 
 	// Add a session with an explicit started_at that is
 	// older than the auto-generated created_at.
