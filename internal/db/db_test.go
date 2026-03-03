@@ -1013,6 +1013,44 @@ func TestStats(t *testing.T) {
 	}
 }
 
+func TestStatsEarliestFallsBackToCreatedAt(t *testing.T) {
+	d := testDB(t)
+
+	// Session with no started_at — earliest should fall
+	// back to created_at instead of being nil.
+	insertSession(t, d, "s-no-start", "proj")
+	insertMessages(t, d, userMsg("s-no-start", 0, "hi"))
+
+	stats, err := d.GetStats(context.Background())
+	requireNoError(t, err, "GetStats")
+	if stats.EarliestSession == nil {
+		t.Fatal(
+			"earliest_session nil when started_at missing;" +
+				" should fall back to created_at",
+		)
+	}
+
+	// Add a session with an explicit started_at that is
+	// older than the auto-generated created_at.
+	old := "2020-01-01T00:00:00Z"
+	insertSession(t, d, "s-old", "proj", func(s *Session) {
+		s.StartedAt = &old
+	})
+	insertMessages(t, d, userMsg("s-old", 0, "hello"))
+
+	stats, err = d.GetStats(context.Background())
+	requireNoError(t, err, "GetStats with old session")
+	if stats.EarliestSession == nil {
+		t.Fatal("earliest_session nil")
+	}
+	if *stats.EarliestSession != old {
+		t.Errorf(
+			"earliest_session = %q, want %q",
+			*stats.EarliestSession, old,
+		)
+	}
+}
+
 func TestGetProjects(t *testing.T) {
 	d := testDB(t)
 

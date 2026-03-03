@@ -53,7 +53,9 @@ func (db *DB) GetStats(ctx context.Context) (Stats, error) {
 			 WHERE ` + rootSessionFilter + `),
 			(SELECT COUNT(DISTINCT machine) FROM sessions
 			 WHERE ` + rootSessionFilter + `),
-			(SELECT MIN(started_at) FROM sessions
+			(SELECT MIN(COALESCE(
+				NULLIF(started_at, ''), created_at
+			 )) FROM sessions
 			 WHERE ` + rootSessionFilter + `)`
 
 	var s Stats
