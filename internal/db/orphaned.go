@@ -12,6 +12,12 @@ import (
 // in this database. This preserves archived sessions whose
 // source files no longer exist on disk.
 //
+// Orphaned sessions are identified by ID-diff: any session
+// present in the source but absent from the target after a
+// full file sync. This correctly captures sessions whose
+// source files were deleted, moved, or otherwise lost —
+// exactly the set that would be dropped by a naive DB swap.
+//
 // The source database must not have active connections (call
 // CloseConnections on its DB handle first). Uses ATTACH
 // DATABASE on a pinned connection for atomicity.

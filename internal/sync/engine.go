@@ -466,15 +466,25 @@ func (e *Engine) ResyncAll(
 	// Clean up stale temp DB from a prior crash.
 	removeTempDB(tempPath)
 
-	// 1. Clear in-memory skip cache.
+	// 1. Snapshot and clear in-memory skip cache. The
+	// snapshot is restored on early failure so behavior
+	// matches the persisted DB until the next restart.
 	e.skipMu.Lock()
+	savedSkipCache := e.skipCache
 	e.skipCache = make(map[string]int64)
 	e.skipMu.Unlock()
+
+	restoreSkipCache := func() {
+		e.skipMu.Lock()
+		e.skipCache = savedSkipCache
+		e.skipMu.Unlock()
+	}
 
 	// 2. Open a fresh DB at the temp path.
 	newDB, err := db.Open(tempPath)
 	if err != nil {
 		log.Printf("resync: open temp db: %v", err)
+		restoreSkipCache()
 		stats := SyncStats{
 			Warnings: []string{
 				"resync failed: " + err.Error(),
@@ -512,6 +522,7 @@ func (e *Engine) ResyncAll(
 		)
 		newDB.Close()
 		removeTempDB(tempPath)
+		restoreSkipCache()
 		stats.Warnings = append(stats.Warnings, fmt.Sprintf(
 			"resync aborted: %d synced, %d failed",
 			stats.Synced, stats.Failed,
@@ -534,6 +545,7 @@ func (e *Engine) ResyncAll(
 		)
 		newDB.Close()
 		removeTempDB(tempPath)
+		restoreSkipCache()
 		// Connections may be partially closed; reopen to
 		// restore service before returning.
 		if rerr := origDB.Reopen(); rerr != nil {
@@ -556,6 +568,7 @@ func (e *Engine) ResyncAll(
 		)
 		newDB.Close()
 		removeTempDB(tempPath)
+		restoreSkipCache()
 		if rerr := origDB.Reopen(); rerr != nil {
 			log.Printf("resync: recovery reopen: %v", rerr)
 		}
@@ -570,19 +583,27 @@ func (e *Engine) ResyncAll(
 	)
 
 	// Copy orphaned sessions (source files gone) from the
-	// old DB so archived data is preserved.
+	// old DB so archived data is preserved. Failure aborts
+	// the swap to avoid losing archived sessions.
 	orphaned, err := newDB.CopyOrphanedDataFrom(origPath)
 	if err != nil {
 		log.Printf("resync: copy orphaned sessions: %v", err)
 		stats.Warnings = append(stats.Warnings,
-			"orphaned session copy failed: "+err.Error(),
+			"orphaned session copy failed, aborting swap: "+
+				err.Error(),
 		)
-		// Non-fatal: proceed with swap. The freshly synced
-		// data is still valid; only archived sessions whose
-		// files are gone are lost.
-	} else {
-		stats.OrphanedCopied = orphaned
+		newDB.Close()
+		removeTempDB(tempPath)
+		restoreSkipCache()
+		if rerr := origDB.Reopen(); rerr != nil {
+			log.Printf("resync: recovery reopen: %v", rerr)
+		}
+		e.mu.Lock()
+		e.lastSyncStats = stats
+		e.mu.Unlock()
+		return stats
 	}
+	stats.OrphanedCopied = orphaned
 
 	// 5. Close newDB and swap files, then reopen origDB.
 	newDB.Close()
@@ -595,6 +616,7 @@ func (e *Engine) ResyncAll(
 			"resync swap failed: "+err.Error(),
 		)
 		removeTempDB(tempPath)
+		restoreSkipCache()
 		// Restore service even on rename failure.
 		if rerr := origDB.Reopen(); rerr != nil {
 			log.Printf("resync: recovery reopen: %v", rerr)
