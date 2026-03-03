@@ -138,6 +138,7 @@ func (b *codexSessionBuilder) handleFunctionCall(
 	}
 
 	content := formatCodexFunctionCall(name, payload)
+	inputJSON := extractCodexInputJSON(payload)
 
 	b.messages = append(b.messages, ParsedMessage{
 		Ordinal:       b.ordinal,
@@ -147,8 +148,9 @@ func (b *codexSessionBuilder) handleFunctionCall(
 		HasToolUse:    true,
 		ContentLength: len(content),
 		ToolCalls: []ParsedToolCall{{
-			ToolName: name,
-			Category: NormalizeToolCategory(name),
+			ToolName:  name,
+			Category:  NormalizeToolCategory(name),
+			InputJSON: inputJSON,
 		}},
 	})
 	b.ordinal++
@@ -233,6 +235,38 @@ func parseCodexFunctionArgs(
 		}
 	}
 	return gjson.Result{}, ""
+}
+
+// extractCodexInputJSON returns the raw JSON string of the
+// function call arguments from the payload. It checks
+// "arguments" then "input", normalizing string-encoded JSON
+// to an object string.
+func extractCodexInputJSON(payload gjson.Result) string {
+	for _, key := range []string{"arguments", "input"} {
+		arg := payload.Get(key)
+		if !arg.Exists() {
+			continue
+		}
+
+		switch arg.Type {
+		case gjson.String:
+			s := strings.TrimSpace(arg.Str)
+			if s == "" {
+				continue
+			}
+			if gjson.Valid(s) {
+				return s
+			}
+			return arg.Str
+		default:
+			raw := strings.TrimSpace(arg.Raw)
+			if raw == "" || raw == "{}" || raw == "[]" {
+				continue
+			}
+			return arg.Raw
+		}
+	}
+	return ""
 }
 
 func formatCodexBashCall(
