@@ -814,6 +814,53 @@ func TestListSessionsPaginationNoDuplicates(t *testing.T) {
 	}
 }
 
+func TestListSessionsPaginationEmptyTimestamps(t *testing.T) {
+	d := testDB(t)
+
+	// Mix of normal, NULL, and empty-string timestamps.
+	// Empty-string ended_at/started_at should sort by
+	// created_at, same as NULL.
+	insertSession(t, d, "s-normal", "proj", func(s *Session) {
+		s.EndedAt = Ptr("2024-06-01T12:00:00Z")
+		s.StartedAt = Ptr("2024-06-01T10:00:00Z")
+	})
+	insertSession(t, d, "s-empty-ended", "proj", func(s *Session) {
+		s.EndedAt = Ptr("")
+		s.StartedAt = Ptr("2024-05-01T10:00:00Z")
+	})
+	insertSession(t, d, "s-both-empty", "proj", func(s *Session) {
+		s.EndedAt = Ptr("")
+		s.StartedAt = Ptr("")
+	})
+	insertSession(t, d, "s-null-ts", "proj")
+
+	// Paginate 1 at a time to exercise cursor encoding.
+	seen := make(map[string]bool)
+	cursor := ""
+	for {
+		page, err := d.ListSessions(
+			context.Background(),
+			SessionFilter{Limit: 1, Cursor: cursor},
+		)
+		if err != nil {
+			t.Fatalf("ListSessions: %v", err)
+		}
+		for _, s := range page.Sessions {
+			if seen[s.ID] {
+				t.Errorf("duplicate session %s", s.ID)
+			}
+			seen[s.ID] = true
+		}
+		if page.NextCursor == "" {
+			break
+		}
+		cursor = page.NextCursor
+	}
+	if len(seen) != 4 {
+		t.Errorf("saw %d sessions, want 4", len(seen))
+	}
+}
+
 func TestListSessionsProjectFilter(t *testing.T) {
 	d := testDB(t)
 
