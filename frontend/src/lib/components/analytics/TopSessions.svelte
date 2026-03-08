@@ -17,7 +17,11 @@
   }
 
   function handleSessionClick(id: string) {
-    router.navigate("sessions");
+    const params: Record<string, string> = {};
+    if (analytics.includeOneShot) {
+      params["include_one_shot"] = "true";
+    }
+    router.navigate("sessions", params);
     sessions.selectSession(id);
   }
 </script>

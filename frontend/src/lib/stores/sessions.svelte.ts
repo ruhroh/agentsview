@@ -129,6 +129,10 @@ class SessionsStore {
       project = "";
     }
 
+    const prevOneShot = this.filters.includeOneShot;
+    const nextOneShot =
+      params["include_one_shot"] === "true";
+
     this.filters = {
       project,
       agent: params["agent"] ?? "",
@@ -142,9 +146,11 @@ class SessionsStore {
       minUserMessages: Number.isFinite(minUserMsgs)
         ? minUserMsgs
         : 0,
-      includeOneShot:
-        params["include_one_shot"] === "true",
+      includeOneShot: nextOneShot,
     };
+    if (prevOneShot !== nextOneShot) {
+      this.invalidateFilterCaches();
+    }
     if (this.pendingNavTarget) {
       this.activeSessionId = this.pendingNavTarget;
       this.pendingNavTarget = null;
@@ -336,8 +342,10 @@ class SessionsStore {
   }
 
   setProjectFilter(project: string) {
+    const wasOneShot = this.filters.includeOneShot;
     this.filters = { ...defaultFilters(), project, agent: this.filters.agent };
     this.activeSessionId = null;
+    if (wasOneShot) this.invalidateFilterCaches();
     this.load();
   }
 
@@ -395,8 +403,10 @@ class SessionsStore {
 
   clearSessionFilters() {
     const project = this.filters.project;
+    const wasOneShot = this.filters.includeOneShot;
     this.filters = { ...defaultFilters(), project };
     this.activeSessionId = null;
+    if (wasOneShot) this.invalidateFilterCaches();
     this.load();
   }
 
