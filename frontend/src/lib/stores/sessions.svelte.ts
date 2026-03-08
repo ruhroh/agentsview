@@ -25,6 +25,7 @@ interface Filters {
   minMessages: number;
   maxMessages: number;
   minUserMessages: number;
+  includeOneShot: boolean;
 }
 
 function defaultFilters(): Filters {
@@ -39,6 +40,7 @@ function defaultFilters(): Filters {
     minMessages: 0,
     maxMessages: 0,
     minUserMessages: 0,
+    includeOneShot: false,
   };
 }
 
@@ -96,6 +98,7 @@ class SessionsStore {
         f.maxMessages > 0 ? f.maxMessages : undefined,
       min_user_messages:
         f.minUserMessages > 0 ? f.minUserMessages : undefined,
+      include_one_shot: f.includeOneShot || undefined,
     };
   }
 
@@ -139,6 +142,8 @@ class SessionsStore {
       minUserMessages: Number.isFinite(minUserMsgs)
         ? minUserMsgs
         : 0,
+      includeOneShot:
+        params["include_one_shot"] === "true",
     };
     if (this.pendingNavTarget) {
       this.activeSessionId = this.pendingNavTarget;
@@ -256,7 +261,10 @@ class SessionsStore {
     const ver = this.projectsVersion;
     this.projectsPromise = (async () => {
       try {
-        const res = await api.getProjects();
+        const params = this.filters.includeOneShot
+          ? { include_one_shot: true as const }
+          : {};
+        const res = await api.getProjects(params);
         if (ver === this.projectsVersion) {
           this.projects = res.projects;
           this.projectsLoaded = true;
@@ -278,7 +286,10 @@ class SessionsStore {
     const ver = this.agentsVersion;
     this.agentsPromise = (async () => {
       try {
-        const res = await api.getAgents();
+        const params = this.filters.includeOneShot
+          ? { include_one_shot: true as const }
+          : {};
+        const res = await api.getAgents(params);
         if (ver === this.agentsVersion) {
           this.agents = res.agents;
           this.agentsLoaded = true;
@@ -361,6 +372,13 @@ class SessionsStore {
     this.load();
   }
 
+  setIncludeOneShotFilter(include: boolean) {
+    this.filters.includeOneShot = include;
+    this.activeSessionId = null;
+    this.invalidateFilterCaches();
+    this.load();
+  }
+
   get hasActiveFilters(): boolean {
     const f = this.filters;
     return !!(
@@ -370,7 +388,8 @@ class SessionsStore {
       f.dateFrom ||
       f.dateTo ||
       f.date ||
-      f.minUserMessages > 0
+      f.minUserMessages > 0 ||
+      f.includeOneShot
     );
   }
 

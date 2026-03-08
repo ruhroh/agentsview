@@ -65,6 +65,7 @@ class AnalyticsStore {
   project: string = $state("");
   agent: string = $state("");
   minUserMessages: number = $state(0);
+  includeOneShot: boolean = $state(false);
   recentlyActive: boolean = $state(false);
   selectedDow: number | null = $state(null);
   selectedHour: number | null = $state(null);
@@ -126,6 +127,7 @@ class AnalyticsStore {
       this.project !== "" ||
       this.agent !== "" ||
       this.minUserMessages > 0 ||
+      this.includeOneShot ||
       this.recentlyActive ||
       this.selectedDow !== null ||
       this.selectedHour !== null
@@ -137,13 +139,16 @@ class AnalyticsStore {
     this.project = "";
     this.agent = "";
     this.minUserMessages = 0;
+    this.includeOneShot = false;
     this.recentlyActive = false;
     this.selectedDow = null;
     this.selectedHour = null;
     sessions.filters.project = "";
     sessions.filters.agent = "";
     sessions.filters.minUserMessages = 0;
+    sessions.filters.includeOneShot = false;
     sessions.filters.recentlyActive = false;
+    sessions.invalidateFilterCaches();
     sessions.load();
     this.fetchAll();
   }
@@ -158,6 +163,14 @@ class AnalyticsStore {
   clearMinUserMessages() {
     this.minUserMessages = 0;
     sessions.filters.minUserMessages = 0;
+    sessions.load();
+    this.fetchAll();
+  }
+
+  clearIncludeOneShot() {
+    this.includeOneShot = false;
+    sessions.filters.includeOneShot = false;
+    sessions.invalidateFilterCaches();
     sessions.load();
     this.fetchAll();
   }
@@ -219,6 +232,9 @@ class AnalyticsStore {
     if (this.minUserMessages > 0) {
       p.min_user_messages = this.minUserMessages;
     }
+    if (this.includeOneShot) {
+      p.include_one_shot = true;
+    }
     if (this.recentlyActive) {
       p.active_since = new Date(
         Date.now() - 24 * 60 * 60 * 1000,
@@ -253,6 +269,9 @@ class AnalyticsStore {
       if (this.agent) p.agent = this.agent;
       if (this.minUserMessages > 0) {
         p.min_user_messages = this.minUserMessages;
+      }
+      if (this.includeOneShot) {
+        p.include_one_shot = true;
       }
       if (this.recentlyActive) {
         p.active_since = new Date(

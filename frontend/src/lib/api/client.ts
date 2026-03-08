@@ -86,6 +86,7 @@ export interface ListSessionsParams {
   min_messages?: number;
   max_messages?: number;
   min_user_messages?: number;
+  include_one_shot?: boolean;
   cursor?: string;
   limit?: number;
 }
@@ -152,16 +153,20 @@ export function search(
 
 /* Metadata */
 
-export function getProjects(): Promise<ProjectsResponse> {
-  return fetchJSON("/projects");
+export function getProjects(
+  params: { include_one_shot?: boolean } = {},
+): Promise<ProjectsResponse> {
+  return fetchJSON(`/projects${buildQuery({ ...params })}`);
 }
 
 export function getMachines(): Promise<MachinesResponse> {
   return fetchJSON("/machines");
 }
 
-export function getAgents(): Promise<AgentsResponse> {
-  return fetchJSON("/agents");
+export function getAgents(
+  params: { include_one_shot?: boolean } = {},
+): Promise<AgentsResponse> {
+  return fetchJSON(`/agents${buildQuery({ ...params })}`);
 }
 
 export function getStats(): Promise<Stats> {
@@ -395,6 +400,7 @@ export interface AnalyticsParams {
   dow?: number;
   hour?: number;
   min_user_messages?: number;
+  include_one_shot?: boolean;
   active_since?: string;
 }
 

@@ -296,3 +296,50 @@ func TestActiveSinceUsesEndedAtOverStartedAt(t *testing.T) {
 		})
 	}
 }
+
+func TestSessionFilterExcludeOneShot(t *testing.T) {
+	d := testDB(t)
+
+	insertSession(t, d, "zero", "proj", func(s *Session) {
+		s.MessageCount = 2
+		s.UserMessageCount = 0
+	})
+	insertSession(t, d, "one", "proj", func(s *Session) {
+		s.MessageCount = 3
+		s.UserMessageCount = 1
+	})
+	insertSession(t, d, "two", "proj", func(s *Session) {
+		s.MessageCount = 5
+		s.UserMessageCount = 2
+	})
+	insertSession(t, d, "ten", "proj", func(s *Session) {
+		s.MessageCount = 20
+		s.UserMessageCount = 10
+	})
+
+	tests := []struct {
+		name           string
+		excludeOneShot bool
+		want           []string
+	}{
+		{
+			"IncludeAll",
+			false,
+			[]string{"zero", "one", "two", "ten"},
+		},
+		{
+			"ExcludeOneShot",
+			true,
+			[]string{"two", "ten"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := SessionFilter{
+				ExcludeOneShot: tt.excludeOneShot,
+			}
+			requireSessions(t, d, f, tt.want)
+		})
+	}
+}

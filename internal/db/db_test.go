@@ -1275,7 +1275,7 @@ func TestGetProjects(t *testing.T) {
 	})
 	insertSession(t, d, "s3", "alpha")
 
-	projects, err := d.GetProjects(context.Background())
+	projects, err := d.GetProjects(context.Background(), false)
 	requireNoError(t, err, "GetProjects")
 	if len(projects) != 2 {
 		t.Fatalf("got %d projects, want 2", len(projects))
@@ -3329,7 +3329,7 @@ func TestGetAgentsExcludesEmptyAgent(t *testing.T) {
 	insertSession(t, d, "s3", "proj",
 		func(s *Session) { s.Agent = "" })
 
-	agents, err := d.GetAgents(context.Background())
+	agents, err := d.GetAgents(context.Background(), false)
 	if err != nil {
 		t.Fatalf("GetAgents: %v", err)
 	}
@@ -3347,7 +3347,7 @@ func TestGetAgentsExcludesEmptyAgent(t *testing.T) {
 func TestGetAgentsEmptyResultSerializesAsArray(t *testing.T) {
 	d := testDB(t)
 
-	agents, err := d.GetAgents(context.Background())
+	agents, err := d.GetAgents(context.Background(), false)
 	if err != nil {
 		t.Fatalf("GetAgents: %v", err)
 	}
@@ -3886,13 +3886,13 @@ func TestMetadataQueriesExcludeTrashed(t *testing.T) {
 	})
 
 	// Before trashing: both projects, agents, machines visible.
-	projects, err := d.GetProjects(ctx)
+	projects, err := d.GetProjects(ctx, false)
 	requireNoError(t, err, "GetProjects before trash")
 	if len(projects) != 2 {
 		t.Fatalf("projects before trash: got %d, want 2", len(projects))
 	}
 
-	agents, err := d.GetAgents(ctx)
+	agents, err := d.GetAgents(ctx, false)
 	requireNoError(t, err, "GetAgents before trash")
 	if len(agents) != 2 {
 		t.Fatalf("agents before trash: got %d, want 2", len(agents))
@@ -3907,7 +3907,7 @@ func TestMetadataQueriesExcludeTrashed(t *testing.T) {
 	// Soft-delete s2: its project/agent/machine should disappear.
 	requireNoError(t, d.SoftDeleteSession("s2"), "soft delete s2")
 
-	projects, err = d.GetProjects(ctx)
+	projects, err = d.GetProjects(ctx, false)
 	requireNoError(t, err, "GetProjects after trash")
 	if len(projects) != 1 {
 		t.Errorf("projects after trash: got %d, want 1", len(projects))
@@ -3916,7 +3916,7 @@ func TestMetadataQueriesExcludeTrashed(t *testing.T) {
 		t.Errorf("project name: got %q, want %q", projects[0].Name, "proj-a")
 	}
 
-	agents, err = d.GetAgents(ctx)
+	agents, err = d.GetAgents(ctx, false)
 	requireNoError(t, err, "GetAgents after trash")
 	if len(agents) != 1 {
 		t.Errorf("agents after trash: got %d, want 1", len(agents))

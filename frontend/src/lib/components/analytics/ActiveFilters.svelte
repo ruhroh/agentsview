@@ -39,6 +39,7 @@
     (analytics.project !== "" ? 1 : 0) +
     (analytics.agent !== "" ? 1 : 0) +
     (analytics.minUserMessages > 0 ? 1 : 0) +
+    (analytics.includeOneShot ? 1 : 0) +
     (analytics.recentlyActive ? 1 : 0) +
     (hasTime ? 1 : 0)
   );
@@ -151,6 +152,16 @@
       </button>
     {/if}
 
+    {#if analytics.includeOneShot}
+      <button
+        class="filter-chip"
+        onclick={() => analytics.clearIncludeOneShot()}
+        title="Clear single-turn filter"
+      >
+        Single-turn included
+        <span class="chip-x">&times;</span>
+      </button>
+    {/if}
 
     {#if hasTime}
       <button

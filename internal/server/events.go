@@ -225,7 +225,8 @@ func (s *Server) handleGetStats(
 func (s *Server) handleListProjects(
 	w http.ResponseWriter, r *http.Request,
 ) {
-	projects, err := s.db.GetProjects(r.Context())
+	excludeOneShot := r.URL.Query().Get("include_one_shot") != "true"
+	projects, err := s.db.GetProjects(r.Context(), excludeOneShot)
 	if err != nil {
 		if handleContextError(w, err) {
 			return
@@ -257,7 +258,8 @@ func (s *Server) handleListMachines(
 func (s *Server) handleListAgents(
 	w http.ResponseWriter, r *http.Request,
 ) {
-	agents, err := s.db.GetAgents(r.Context())
+	excludeOneShot := r.URL.Query().Get("include_one_shot") != "true"
+	agents, err := s.db.GetAgents(r.Context(), excludeOneShot)
 	if err != nil {
 		if handleContextError(w, err) {
 			return
