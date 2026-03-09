@@ -81,7 +81,7 @@ func (s *Server) handleResumeSession(
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	if session == nil {
+	if session == nil || session.DeletedAt != nil {
 		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
@@ -160,7 +160,7 @@ func (s *Server) handleResumeSession(
 	}
 
 	// Detect and launch a terminal.
-	termBin, termArgs, termErr := detectTerminal(cmd, sessionDir, termCfg)
+	termBin, termArgs, termName, termErr := detectTerminal(cmd, sessionDir, termCfg)
 	if termErr != nil {
 		// Can't launch — return the command for clipboard fallback.
 		log.Printf("resume: terminal detection failed: %v", termErr)
@@ -199,7 +199,7 @@ func (s *Server) handleResumeSession(
 
 	writeJSON(w, http.StatusOK, resumeResponse{
 		Launched: true,
-		Terminal: termBin,
+		Terminal: termName,
 		Command:  cmd,
 		Cwd:      sessionDir,
 	})
@@ -227,25 +227,27 @@ func shellQuote(s string) string {
 }
 
 // detectTerminal finds a suitable terminal emulator and builds the
-// full argument list to launch the given command.
+// full argument list to launch the given command. Returns the
+// executable path, args, a user-facing display name, and any error.
 func detectTerminal(
 	cmd string, cwd string, tc config.TerminalConfig,
-) (bin string, args []string, err error) {
+) (bin string, args []string, name string, err error) {
 	// Custom terminal mode — use the user-configured binary + args.
 	if tc.Mode == "custom" && tc.CustomBin != "" {
 		path, lookErr := exec.LookPath(tc.CustomBin)
 		if lookErr != nil {
-			return "", nil, fmt.Errorf(
+			return "", nil, "", fmt.Errorf(
 				"custom terminal %q not found: %w",
 				tc.CustomBin, lookErr,
 			)
 		}
+		displayName := filepath.Base(tc.CustomBin)
 		if tc.CustomArgs != "" {
 			// Shell-aware split so that quoted args like
 			// --title "My Terminal" are kept together.
 			parts, splitErr := shlex.Split(tc.CustomArgs)
 			if splitErr != nil {
-				return "", nil, fmt.Errorf(
+				return "", nil, "", fmt.Errorf(
 					"parsing custom_args: %w", splitErr,
 				)
 			}
@@ -253,10 +255,10 @@ func detectTerminal(
 			for _, p := range parts {
 				a = append(a, strings.ReplaceAll(p, "{cmd}", cmd))
 			}
-			return path, a, nil
+			return path, a, displayName, nil
 		}
 		// No args template — default pattern.
-		return path, []string{"-e", "bash", "-c", cmd + "; exec bash"}, nil
+		return path, []string{"-e", "bash", "-c", cmd + "; exec bash"}, displayName, nil
 	}
 
 	switch runtime.GOOS {
@@ -265,7 +267,7 @@ func detectTerminal(
 	case "linux":
 		return detectTerminalLinux(cmd)
 	default:
-		return "", nil, fmt.Errorf(
+		return "", nil, "", fmt.Errorf(
 			"unsupported OS %q for terminal launch", runtime.GOOS,
 		)
 	}
@@ -273,7 +275,7 @@ func detectTerminal(
 
 func detectTerminalDarwin(
 	cmd string, cwd string,
-) (string, []string, error) {
+) (string, []string, string, error) {
 	// Check for iTerm2 first, then fall back to Terminal.app.
 	// Use osascript to tell the app to open a new window and run
 	// the command.
@@ -304,7 +306,7 @@ func detectTerminalDarwin(
 				end tell`,
 				safe,
 			)
-			return "osascript", []string{"-e", appleScript}, nil
+			return "osascript", []string{"-e", appleScript}, "iTerm2", nil
 		}
 		// Fall back to Terminal.app.
 		appleScript := fmt.Sprintf(
@@ -314,9 +316,9 @@ func detectTerminalDarwin(
 			end tell`,
 			safe,
 		)
-		return "osascript", []string{"-e", appleScript}, nil
+		return "osascript", []string{"-e", appleScript}, "Terminal", nil
 	}
-	return "", nil, fmt.Errorf("osascript not found on macOS")
+	return "", nil, "", fmt.Errorf("osascript not found on macOS")
 }
 
 func (s *Server) handleGetTerminalConfig(
@@ -434,7 +436,7 @@ func isDir(path string) bool {
 	return err == nil && info.IsDir()
 }
 
-func detectTerminalLinux(cmd string) (string, []string, error) {
+func detectTerminalLinux(cmd string) (string, []string, string, error) {
 	// Check $TERMINAL env var first. If it resolves, build args
 	// using the per-terminal template when the basename matches a
 	// known candidate, otherwise use a generic pattern.
@@ -442,7 +444,7 @@ func detectTerminalLinux(cmd string) (string, []string, error) {
 		if path, err := exec.LookPath(envTerm); err == nil {
 			base := filepath.Base(envTerm)
 			args := buildTerminalArgs(base, cmd)
-			return path, args, nil
+			return path, args, base, nil
 		}
 	}
 
@@ -452,10 +454,10 @@ func detectTerminalLinux(cmd string) (string, []string, error) {
 		if err != nil {
 			continue
 		}
-		return path, buildTerminalArgs(c.bin, cmd), nil
+		return path, buildTerminalArgs(c.bin, cmd), c.bin, nil
 	}
 
-	return "", nil, fmt.Errorf(
+	return "", nil, "", fmt.Errorf(
 		"no terminal emulator found; install kitty, alacritty, " +
 			"gnome-terminal, or set $TERMINAL",
 	)

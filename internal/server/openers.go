@@ -168,7 +168,7 @@ func (s *Server) handleOpenSession(
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	if session == nil {
+	if session == nil || session.DeletedAt != nil {
 		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}

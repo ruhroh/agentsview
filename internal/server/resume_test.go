@@ -44,7 +44,7 @@ func TestDetectTerminalLinux_NoTerminal(t *testing.T) {
 	// This test validates the error path — on CI or servers
 	// without a display, no terminal emulator is typically
 	// available.
-	_, _, err := detectTerminalLinux("echo test")
+	_, _, _, err := detectTerminalLinux("echo test")
 	// We just check it doesn't panic. The error may or may not
 	// occur depending on the environment.
 	_ = err
