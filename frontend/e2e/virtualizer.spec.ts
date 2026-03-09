@@ -15,7 +15,7 @@ const LOC = {
 
 const SESSIONS = {
   ALPHA_5: { project: "project-alpha", count: 3, displayRows: 5 },
-  ALPHA_2: { project: "project-alpha", count: 1, displayRows: 2 },
+  ALPHA_2: { project: "project-alpha", count: 2, displayRows: 2 },
   BETA_6: { project: "project-beta", count: 3, displayRows: 5 },
 };
 
