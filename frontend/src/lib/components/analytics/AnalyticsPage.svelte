@@ -56,6 +56,8 @@
     const headerRecentlyActive = sessions.filters.recentlyActive;
     const headerMinUserMessages =
       sessions.filters.minUserMessages;
+    const headerIncludeOneShot =
+      sessions.filters.includeOneShot;
 
     const curProject = untrack(() => analytics.project);
     const curAgent = untrack(() => analytics.agent);
@@ -64,6 +66,9 @@
     );
     const curMinUser = untrack(
       () => analytics.minUserMessages,
+    );
+    const curIncludeOneShot = untrack(
+      () => analytics.includeOneShot,
     );
 
     let changed = false;
@@ -86,6 +91,11 @@
       : 0;
     if (curMinUser !== minUserVal) {
       analytics.minUserMessages = minUserVal;
+      changed = true;
+    }
+
+    if (curIncludeOneShot !== headerIncludeOneShot) {
+      analytics.includeOneShot = headerIncludeOneShot;
       changed = true;
     }
 

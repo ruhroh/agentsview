@@ -289,6 +289,7 @@ func (te *testEnv) seedSession(
 	dbtest.SeedSession(t, te.db, id, project, func(s *db.Session) {
 		s.Machine = "test"
 		s.MessageCount = msgCount
+		s.UserMessageCount = max(msgCount, 2)
 		s.StartedAt = dbtest.Ptr(tsSeed)
 		s.EndedAt = dbtest.Ptr(tsSeedEnd)
 		s.FirstMessage = dbtest.Ptr("Hello world")
@@ -578,6 +579,10 @@ type uploadResponse struct {
 	Messages  int    `json:"messages"`
 }
 
+type machineListResponse struct {
+	Machines []string `json:"machines"`
+}
+
 type syncResultResponse struct {
 	TotalSessions int `json:"total_sessions"`
 	Synced        int `json:"synced"`
@@ -663,6 +668,43 @@ func TestListSessions_ExcludeProjectFilter(t *testing.T) {
 	if resp.Sessions[0].ID != "s1" {
 		t.Errorf("expected session s1, got %s",
 			resp.Sessions[0].ID)
+	}
+}
+
+func TestListSessions_ExcludeOneShotDefault(t *testing.T) {
+	te := setup(t)
+	te.seedSession(t, "s1", "my-app", 5, func(s *db.Session) {
+		s.UserMessageCount = 1
+	})
+	te.seedSession(t, "s2", "my-app", 10, func(s *db.Session) {
+		s.UserMessageCount = 5
+	})
+	te.seedSession(t, "s3", "my-app", 3, func(s *db.Session) {
+		s.UserMessageCount = 0
+	})
+
+	// Default: exclude one-shot sessions.
+	w := te.get(t, "/api/v1/sessions")
+	assertStatus(t, w, http.StatusOK)
+	resp := decode[sessionListResponse](t, w)
+	if len(resp.Sessions) != 1 {
+		t.Fatalf("default: expected 1 session, got %d",
+			len(resp.Sessions))
+	}
+	if resp.Sessions[0].ID != "s2" {
+		t.Errorf("default: expected s2, got %s",
+			resp.Sessions[0].ID)
+	}
+
+	// Explicit include_one_shot=true: include all.
+	w = te.get(t,
+		"/api/v1/sessions?include_one_shot=true",
+	)
+	assertStatus(t, w, http.StatusOK)
+	resp = decode[sessionListResponse](t, w)
+	if len(resp.Sessions) != 3 {
+		t.Fatalf("include: expected 3 sessions, got %d",
+			len(resp.Sessions))
 	}
 }
 
@@ -1159,6 +1201,78 @@ func TestGetStats(t *testing.T) {
 	if resp.MessageCount != 5 {
 		t.Fatalf("expected 5 messages, got %d",
 			resp.MessageCount)
+	}
+}
+
+func TestGetStats_ExcludeOneShotDefault(t *testing.T) {
+	te := setup(t)
+	te.seedSession(t, "s1", "my-app", 5, func(s *db.Session) {
+		s.UserMessageCount = 1
+	})
+	te.seedSession(t, "s2", "my-app", 10, func(s *db.Session) {
+		s.UserMessageCount = 5
+	})
+	te.seedMessages(t, "s1", 5)
+	te.seedMessages(t, "s2", 10)
+
+	// Default: exclude one-shot sessions.
+	w := te.get(t, "/api/v1/stats")
+	assertStatus(t, w, http.StatusOK)
+	resp := decode[db.Stats](t, w)
+	if resp.SessionCount != 1 {
+		t.Errorf("default: session_count = %d, want 1",
+			resp.SessionCount)
+	}
+	if resp.MessageCount != 10 {
+		t.Errorf("default: message_count = %d, want 10",
+			resp.MessageCount)
+	}
+
+	// Explicit include: all sessions.
+	w = te.get(t, "/api/v1/stats?include_one_shot=true")
+	assertStatus(t, w, http.StatusOK)
+	resp = decode[db.Stats](t, w)
+	if resp.SessionCount != 2 {
+		t.Errorf("include: session_count = %d, want 2",
+			resp.SessionCount)
+	}
+	if resp.MessageCount != 15 {
+		t.Errorf("include: message_count = %d, want 15",
+			resp.MessageCount)
+	}
+}
+
+func TestListMachines_ExcludeOneShotDefault(t *testing.T) {
+	te := setup(t)
+	te.seedSession(t, "s1", "my-app", 5, func(s *db.Session) {
+		s.Machine = "laptop"
+		s.UserMessageCount = 1
+	})
+	te.seedSession(t, "s2", "my-app", 10, func(s *db.Session) {
+		s.Machine = "desktop"
+		s.UserMessageCount = 5
+	})
+
+	// Default: exclude one-shot sessions.
+	w := te.get(t, "/api/v1/machines")
+	assertStatus(t, w, http.StatusOK)
+	resp := decode[machineListResponse](t, w)
+	if len(resp.Machines) != 1 {
+		t.Fatalf("default: expected 1 machine, got %d",
+			len(resp.Machines))
+	}
+	if resp.Machines[0] != "desktop" {
+		t.Errorf("default: expected desktop, got %s",
+			resp.Machines[0])
+	}
+
+	// Explicit include: all machines.
+	w = te.get(t, "/api/v1/machines?include_one_shot=true")
+	assertStatus(t, w, http.StatusOK)
+	resp = decode[machineListResponse](t, w)
+	if len(resp.Machines) != 2 {
+		t.Fatalf("include: expected 2 machines, got %d",
+			len(resp.Machines))
 	}
 }
 
@@ -2197,7 +2311,9 @@ func TestResyncPreservesDataThroughSwap(t *testing.T) {
 	}
 
 	// Verify sessions are accessible before resync.
-	w := te.get(t, "/api/v1/sessions")
+	w := te.get(t,
+		"/api/v1/sessions?include_one_shot=true",
+	)
 	assertStatus(t, w, http.StatusOK)
 	before := decode[sessionListResponse](t, w)
 	if before.Total != 2 {
@@ -2224,7 +2340,9 @@ func TestResyncPreservesDataThroughSwap(t *testing.T) {
 	}
 
 	// Verify sessions survived the DB swap.
-	w = te.get(t, "/api/v1/sessions")
+	w = te.get(t,
+		"/api/v1/sessions?include_one_shot=true",
+	)
 	assertStatus(t, w, http.StatusOK)
 	after := decode[sessionListResponse](t, w)
 	if after.Total != 2 {
@@ -2250,7 +2368,9 @@ func TestResyncPreservesDataThroughSwap(t *testing.T) {
 	}
 
 	// Verify projects endpoint works (exercises reader pool).
-	projW := te.get(t, "/api/v1/projects")
+	projW := te.get(t,
+		"/api/v1/projects?include_one_shot=true",
+	)
 	assertStatus(t, projW, http.StatusOK)
 	projects := decode[projectListResponse](t, projW)
 	if len(projects.Projects) != 2 {
@@ -2349,7 +2469,9 @@ func TestResyncConcurrentReads(t *testing.T) {
 	// The real assertion: reads must succeed after resync
 	// completes. If the close->reopen cycle left the DB
 	// in a bad state, this will fail.
-	w := te.get(t, "/api/v1/sessions")
+	w := te.get(t,
+		"/api/v1/sessions?include_one_shot=true",
+	)
 	assertStatus(t, w, http.StatusOK)
 	resp := decode[sessionListResponse](t, w)
 	if resp.Total != 1 {

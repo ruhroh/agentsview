@@ -40,6 +40,9 @@ class SyncStore {
   private watchEventSource: EventSource | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null =
     null;
+  private lastStatsParams: { include_one_shot?: boolean } =
+    {};
+  private statsVersion = 0;
 
   async loadStatus() {
     try {
@@ -70,9 +73,20 @@ class SyncStore {
     }
   }
 
-  async loadStats() {
+  async loadStats(
+    params?: { include_one_shot?: boolean },
+  ) {
+    if (params !== undefined) {
+      this.lastStatsParams = params;
+    }
+    const version = ++this.statsVersion;
     try {
-      this.stats = await api.getStats();
+      const result = await api.getStats(
+        this.lastStatsParams,
+      );
+      if (this.statsVersion === version) {
+        this.stats = result;
+      }
     } catch (error) {
       console.warn("Failed to load sync stats:", error);
     }

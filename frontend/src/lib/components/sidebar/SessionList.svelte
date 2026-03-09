@@ -51,6 +51,9 @@
   let isHideUnknownOn = $derived(
     sessions.filters.hideUnknownProject,
   );
+  let isIncludeOneShotOn = $derived(
+    sessions.filters.includeOneShot,
+  );
 
   let groups = $derived.by(() => {
     const all = sessions.groupedSessions;
@@ -88,7 +91,11 @@
     buildDisplayItems(groups, agentSections, groupByAgent, collapsedAgents),
   );
 
-  let totalCount = $derived(groups.length);
+  let totalCount = $derived(
+    starred.filterOnly
+      ? groups.reduce((n, g) => n + g.sessions.length, 0)
+      : sessions.total,
+  );
   let totalSize = $derived(computeTotalSize(displayItems));
 
   let visibleItems = $derived.by(() => {
@@ -272,6 +279,25 @@
               class:on={isRecentlyActiveOn}
             ></span>
             Recently Active
+          </button>
+        </div>
+        <div class="filter-section">
+          <div class="filter-section-label">
+            Session Type
+          </div>
+          <button
+            class="filter-toggle"
+            class:active={isIncludeOneShotOn}
+            onclick={() =>
+              sessions.setIncludeOneShotFilter(
+                !isIncludeOneShotOn,
+              )}
+          >
+            <span
+              class="toggle-check"
+              class:on={isIncludeOneShotOn}
+            ></span>
+            Include single-turn
           </button>
         </div>
         <div class="filter-section">

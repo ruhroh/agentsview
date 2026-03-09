@@ -55,6 +55,8 @@ func (s *Server) handleListSessions(
 		return
 	}
 
+	includeOneShot := q.Get("include_one_shot") == "true"
+
 	filter := db.SessionFilter{
 		Project:         q.Get("project"),
 		ExcludeProject:  q.Get("exclude_project"),
@@ -67,6 +69,7 @@ func (s *Server) handleListSessions(
 		MinMessages:     minMsgs,
 		MaxMessages:     maxMsgs,
 		MinUserMessages: minUserMsgs,
+		ExcludeOneShot:  !includeOneShot,
 		Cursor:          q.Get("cursor"),
 		Limit:           limit,
 	}

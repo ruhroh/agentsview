@@ -107,6 +107,8 @@ func parseAnalyticsFilter(
 		return db.AnalyticsFilter{}, false
 	}
 
+	includeOneShot := q.Get("include_one_shot") == "true"
+
 	return db.AnalyticsFilter{
 		From:            from,
 		To:              to,
@@ -117,6 +119,7 @@ func parseAnalyticsFilter(
 		DayOfWeek:       dow,
 		Hour:            hour,
 		MinUserMessages: minUserMsgs,
+		ExcludeOneShot:  !includeOneShot,
 		ActiveSince:     activeSince,
 	}, true
 }

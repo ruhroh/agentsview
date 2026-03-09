@@ -21,7 +21,7 @@ type sessionSpec struct {
 }
 
 var specs = []sessionSpec{
-	{"project-alpha", "small-2", 2, 1, "", ""},
+	{"project-alpha", "small-2", 2, 2, "", ""},
 	{"project-alpha", "small-5", 5, 3, "", ""},
 	{"project-beta", "mixed-content-7", 7, 3, "", ""},
 	{"project-beta", "medium-8", 8, 4, "", ""},

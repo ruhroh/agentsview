@@ -1,5 +1,6 @@
 import * as api from "../api/client.js";
 import type { Session, ProjectInfo, AgentInfo } from "../api/types.js";
+import { sync } from "./sync.svelte.js";
 
 const SESSION_PAGE_SIZE = 500;
 
@@ -25,6 +26,7 @@ interface Filters {
   minMessages: number;
   maxMessages: number;
   minUserMessages: number;
+  includeOneShot: boolean;
 }
 
 function defaultFilters(): Filters {
@@ -39,6 +41,7 @@ function defaultFilters(): Filters {
     minMessages: 0,
     maxMessages: 0,
     minUserMessages: 0,
+    includeOneShot: false,
   };
 }
 
@@ -96,6 +99,7 @@ class SessionsStore {
         f.maxMessages > 0 ? f.maxMessages : undefined,
       min_user_messages:
         f.minUserMessages > 0 ? f.minUserMessages : undefined,
+      include_one_shot: f.includeOneShot || undefined,
     };
   }
 
@@ -126,6 +130,10 @@ class SessionsStore {
       project = "";
     }
 
+    const prevOneShot = this.filters.includeOneShot;
+    const nextOneShot =
+      params["include_one_shot"] === "true";
+
     this.filters = {
       project,
       agent: params["agent"] ?? "",
@@ -139,7 +147,11 @@ class SessionsStore {
       minUserMessages: Number.isFinite(minUserMsgs)
         ? minUserMsgs
         : 0,
+      includeOneShot: nextOneShot,
     };
+    if (prevOneShot !== nextOneShot) {
+      this.invalidateFilterCaches();
+    }
     if (this.pendingNavTarget) {
       this.activeSessionId = this.pendingNavTarget;
       this.pendingNavTarget = null;
@@ -256,7 +268,10 @@ class SessionsStore {
     const ver = this.projectsVersion;
     this.projectsPromise = (async () => {
       try {
-        const res = await api.getProjects();
+        const params = this.filters.includeOneShot
+          ? { include_one_shot: true as const }
+          : {};
+        const res = await api.getProjects(params);
         if (ver === this.projectsVersion) {
           this.projects = res.projects;
           this.projectsLoaded = true;
@@ -278,7 +293,10 @@ class SessionsStore {
     const ver = this.agentsVersion;
     this.agentsPromise = (async () => {
       try {
-        const res = await api.getAgents();
+        const params = this.filters.includeOneShot
+          ? { include_one_shot: true as const }
+          : {};
+        const res = await api.getAgents(params);
         if (ver === this.agentsVersion) {
           this.agents = res.agents;
           this.agentsLoaded = true;
@@ -325,8 +343,10 @@ class SessionsStore {
   }
 
   setProjectFilter(project: string) {
+    const wasOneShot = this.filters.includeOneShot;
     this.filters = { ...defaultFilters(), project, agent: this.filters.agent };
     this.activeSessionId = null;
+    if (wasOneShot) this.invalidateFilterCaches();
     this.load();
   }
 
@@ -361,6 +381,13 @@ class SessionsStore {
     this.load();
   }
 
+  setIncludeOneShotFilter(include: boolean) {
+    this.filters.includeOneShot = include;
+    this.activeSessionId = null;
+    this.invalidateFilterCaches();
+    this.load();
+  }
+
   get hasActiveFilters(): boolean {
     const f = this.filters;
     return !!(
@@ -370,14 +397,17 @@ class SessionsStore {
       f.dateFrom ||
       f.dateTo ||
       f.date ||
-      f.minUserMessages > 0
+      f.minUserMessages > 0 ||
+      f.includeOneShot
     );
   }
 
   clearSessionFilters() {
     const project = this.filters.project;
+    const wasOneShot = this.filters.includeOneShot;
     this.filters = { ...defaultFilters(), project };
     this.activeSessionId = null;
+    if (wasOneShot) this.invalidateFilterCaches();
     this.load();
   }
 
@@ -421,6 +451,11 @@ class SessionsStore {
     this.agentsPromise = null;
     this.loadProjects();
     this.loadAgents();
+    sync.loadStats(
+      this.filters.includeOneShot
+        ? { include_one_shot: true }
+        : {},
+    );
   }
 
   /** Remove one or all entries from the undo toast list. */

@@ -51,6 +51,7 @@ type AnalyticsFilter struct {
 	DayOfWeek       *int   // nil = all, 0=Mon, 6=Sun (ISO)
 	Hour            *int   // nil = all, 0-23
 	MinUserMessages int    // user_message_count >= N
+	ExcludeOneShot  bool   // exclude sessions with user_message_count <= 1
 	ActiveSince     string // ISO timestamp cutoff
 }
 
@@ -124,6 +125,9 @@ func (f AnalyticsFilter) buildWhere(
 	if f.MinUserMessages > 0 {
 		preds = append(preds, "user_message_count >= ?")
 		args = append(args, f.MinUserMessages)
+	}
+	if f.ExcludeOneShot {
+		preds = append(preds, "user_message_count > 1")
 	}
 
 	if f.ActiveSince != "" {

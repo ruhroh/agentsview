@@ -182,6 +182,7 @@ type SessionFilter struct {
 	MinMessages     int    // message_count >= N (0 = no filter)
 	MaxMessages     int    // message_count <= N (0 = no filter)
 	MinUserMessages int    // user_message_count >= N (0 = no filter)
+	ExcludeOneShot  bool   // exclude sessions with user_message_count <= 1
 	Cursor          string // opaque cursor from previous page
 	Limit           int
 }
@@ -250,6 +251,9 @@ func buildSessionFilter(f SessionFilter) (string, []any) {
 	if f.MinUserMessages > 0 {
 		preds = append(preds, "user_message_count >= ?")
 		args = append(args, f.MinUserMessages)
+	}
+	if f.ExcludeOneShot {
+		preds = append(preds, "user_message_count > 1")
 	}
 
 	return strings.Join(preds, " AND "), args
@@ -607,16 +611,18 @@ func (db *DB) DeleteSessionIfTrashed(id string) (int64, error) {
 
 // GetProjects returns project names with session counts.
 func (db *DB) GetProjects(
-	ctx context.Context,
+	ctx context.Context, excludeOneShot bool,
 ) ([]ProjectInfo, error) {
-	rows, err := db.getReader().QueryContext(ctx, `
-		SELECT project, COUNT(*) as session_count
+	q := `SELECT project, COUNT(*) as session_count
 		FROM sessions
 		WHERE message_count > 0
 		  AND relationship_type NOT IN ('subagent', 'fork')
-		  AND deleted_at IS NULL
-		GROUP BY project
-		ORDER BY project`)
+		  AND deleted_at IS NULL`
+	if excludeOneShot {
+		q += " AND user_message_count > 1"
+	}
+	q += " GROUP BY project ORDER BY project"
+	rows, err := db.getReader().QueryContext(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("querying projects: %w", err)
 	}
@@ -641,15 +647,17 @@ type ProjectInfo struct {
 
 // GetAgents returns distinct agent names with session counts.
 func (db *DB) GetAgents(
-	ctx context.Context,
+	ctx context.Context, excludeOneShot bool,
 ) ([]AgentInfo, error) {
-	rows, err := db.getReader().QueryContext(ctx, `
-		SELECT agent, COUNT(*) as session_count
+	q := `SELECT agent, COUNT(*) as session_count
 		FROM sessions
 		WHERE message_count > 0 AND agent <> ''
-		  AND deleted_at IS NULL
-		GROUP BY agent
-		ORDER BY agent`)
+		  AND deleted_at IS NULL`
+	if excludeOneShot {
+		q += " AND user_message_count > 1"
+	}
+	q += " GROUP BY agent ORDER BY agent"
+	rows, err := db.getReader().QueryContext(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("querying agents: %w", err)
 	}
@@ -674,11 +682,14 @@ type AgentInfo struct {
 
 // GetMachines returns distinct machine names.
 func (db *DB) GetMachines(
-	ctx context.Context,
+	ctx context.Context, excludeOneShot bool,
 ) ([]string, error) {
-	rows, err := db.getReader().QueryContext(ctx,
-		"SELECT DISTINCT machine FROM sessions WHERE deleted_at IS NULL ORDER BY machine",
-	)
+	q := "SELECT DISTINCT machine FROM sessions WHERE deleted_at IS NULL"
+	if excludeOneShot {
+		q += " AND user_message_count > 1"
+	}
+	q += " ORDER BY machine"
+	rows, err := db.getReader().QueryContext(ctx, q)
 	if err != nil {
 		return nil, err
 	}
