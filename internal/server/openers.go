@@ -39,12 +39,11 @@ var openerCandidates = []openerCandidate{
 	{"nemo", "Nemo", "files", []string{"nemo"}, ""},
 	{"pcmanfm", "PCManFM", "files", []string{"pcmanfm"}, ""},
 
-	// Editors / IDEs
+	// Editors / IDEs (GUI only — CLI editors like vim need a TTY)
 	{"cursor", "Cursor", "editor", []string{"cursor"}, ""},
 	{"vscode", "VS Code", "editor", []string{"code"}, ""},
 	{"zed", "Zed", "editor", []string{"zed"}, ""},
 	{"sublime", "Sublime Text", "editor", []string{"subl"}, ""},
-	{"vim", "Vim", "editor", []string{"nvim", "vim"}, ""},
 	{"emacs", "Emacs", "editor", []string{"emacs"}, ""},
 	{"intellij", "IntelliJ IDEA", "editor", []string{"idea"}, ""},
 	{"goland", "GoLand", "editor", []string{"goland"}, ""},
@@ -67,18 +66,18 @@ var darwinOpenerCandidates = []openerCandidate{
 	// File manager is always Finder on macOS — use "open" command
 	{"finder", "Finder", "files", []string{"open"}, ""},
 
-	// Editors
+	// Editors (GUI only — CLI editors like vim need a TTY)
 	{"cursor", "Cursor", "editor", []string{"cursor"}, ""},
 	{"vscode", "VS Code", "editor", []string{"code"}, ""},
 	{"zed", "Zed", "editor", []string{"zed"}, ""},
 	{"xcode", "Xcode", "editor", []string{"xed"}, ""},
 	{"sublime", "Sublime Text", "editor", []string{"subl"}, ""},
-	{"vim", "Vim", "editor", []string{"nvim", "vim"}, ""},
 
-	// Terminals — iTerm2 and Terminal.app are GUI-only; detect via app bundle.
-	{"ghostty", "Ghostty", "terminal", []string{"ghostty"}, ""},
+	// Terminals — Ghostty, iTerm2, kitty, and Terminal.app are macOS GUI
+	// apps; detect via app bundle path rather than LookPath.
+	{"ghostty", "Ghostty", "terminal", nil, "/Applications/Ghostty.app"},
 	{"iterm2", "iTerm2", "terminal", nil, "/Applications/iTerm.app"},
-	{"kitty", "kitty", "terminal", []string{"kitty"}, ""},
+	{"kitty", "kitty", "terminal", nil, "/Applications/kitty.app"},
 	{"alacritty", "Alacritty", "terminal", []string{"alacritty"}, ""},
 	{"wezterm", "WezTerm", "terminal", []string{"wezterm"}, ""},
 	{"terminal", "Terminal", "terminal", nil, "/System/Applications/Utilities/Terminal.app"},
@@ -254,6 +253,14 @@ func launchOpener(o Opener, dir string) error {
 func launchTerminalInDir(o Opener, dir string) *exec.Cmd {
 	if runtime.GOOS == "darwin" {
 		switch o.ID {
+		case "ghostty":
+			// Ghostty accepts --working-directory via CLI args passed
+			// through `open -a`. The -n flag opens a new instance.
+			return exec.Command("open", "-na", "Ghostty",
+				"--args", "--working-directory="+dir)
+		case "kitty":
+			return exec.Command("open", "-na", "kitty",
+				"--args", "-d", dir)
 		case "iterm2":
 			// Build shell command first, then AppleScript-escape the
 			// entire string once. shellQuote provides POSIX quoting for
@@ -277,9 +284,16 @@ func launchTerminalInDir(o Opener, dir string) *exec.Cmd {
 				escapeForAppleScript(shellCmd),
 			)
 			return exec.Command("osascript", "-e", script)
+		case "alacritty":
+			return exec.Command("open", "-na", "Alacritty",
+				"--args", "--working-directory", dir)
+		case "wezterm":
+			return exec.Command("open", "-na", "WezTerm",
+				"--args", "start", "--cwd", dir)
 		}
 	}
 
+	// Linux: launch via CLI binary directly.
 	switch o.ID {
 	case "kitty":
 		return exec.Command(o.Bin, "--directory", dir)
@@ -298,7 +312,6 @@ func launchTerminalInDir(o Opener, dir string) *exec.Cmd {
 	case "ghostty":
 		return exec.Command(o.Bin, "--working-directory="+dir)
 	default:
-		// generic: try --working-directory, fallback to cd
 		cmd := exec.Command(o.Bin)
 		cmd.Dir = dir
 		return cmd

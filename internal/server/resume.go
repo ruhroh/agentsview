@@ -357,22 +357,22 @@ func (s *Server) handleSetTerminalConfig(
 		return
 	}
 
-	if tc.Mode == "custom" && tc.CustomArgs != "" &&
-		!strings.Contains(tc.CustomArgs, "{cmd}") {
-		writeError(w, http.StatusBadRequest,
-			`custom_args must contain the {cmd} placeholder so the `+
-				`resume command is passed to the terminal`)
-		return
-	}
-
-	// Validate that custom_args can be shell-split so users get
-	// immediate feedback about malformed quoting (e.g. unmatched
-	// quotes) instead of a silent save that fails later at resume.
-	if tc.CustomArgs != "" {
-		if _, splitErr := shlex.Split(tc.CustomArgs); splitErr != nil {
+	// Only validate custom_args when mode is "custom" — stale
+	// args from a previous config shouldn't block saving other modes.
+	if tc.Mode == "custom" {
+		if tc.CustomArgs != "" &&
+			!strings.Contains(tc.CustomArgs, "{cmd}") {
 			writeError(w, http.StatusBadRequest,
-				fmt.Sprintf("custom_args has invalid shell syntax: %v", splitErr))
+				`custom_args must contain the {cmd} placeholder so the `+
+					`resume command is passed to the terminal`)
 			return
+		}
+		if tc.CustomArgs != "" {
+			if _, splitErr := shlex.Split(tc.CustomArgs); splitErr != nil {
+				writeError(w, http.StatusBadRequest,
+					fmt.Sprintf("custom_args has invalid shell syntax: %v", splitErr))
+				return
+			}
 		}
 	}
 
