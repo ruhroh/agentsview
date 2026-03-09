@@ -89,9 +89,6 @@
       </svg>
     </span>
     <span class="group-label">{label}</span>
-    <span class="group-timestamp">
-      {formatTimestamp(timestamp)}
-    </span>
     <button
       type="button"
       class="copy-btn"
@@ -109,6 +106,9 @@
         </svg>
       {/if}
     </button>
+    <span class="group-timestamp">
+      {formatTimestamp(timestamp)}
+    </span>
   </div>
 
   <div class="tool-group-body">

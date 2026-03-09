@@ -94,9 +94,6 @@
     >
       {isUser ? "User" : "Assistant"}
     </span>
-    <span class="timestamp">
-      {formatTimestamp(message.timestamp)}
-    </span>
     <button
       type="button"
       class="copy-btn"
@@ -128,6 +125,9 @@
     {#if pinFeedback}
       <span class="pin-feedback">{pinFeedback}</span>
     {/if}
+    <span class="timestamp">
+      {formatTimestamp(message.timestamp)}
+    </span>
   </div>
 
   <div class="message-body">
