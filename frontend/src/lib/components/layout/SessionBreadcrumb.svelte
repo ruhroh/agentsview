@@ -33,10 +33,20 @@
   let openers: Opener[] = $state([]);
   let openFeedback = $state("");
   let feedbackTimer: ReturnType<typeof setTimeout> | undefined;
+  let sessionDir = $state<string | null>(null);
 
   onMount(() => {
     listOpeners()
       .then((res) => { openers = res.openers; })
+      .catch(() => {});
+  });
+
+  $effect(() => {
+    sessionDir = null;
+    if (!session) return;
+    const id = session.id;
+    getSessionDirectory(id)
+      .then(({ path }) => { sessionDir = path; })
       .catch(() => {});
   });
 
@@ -158,15 +168,13 @@
   }
 
   async function handleCopyFilePath() {
-    if (!session) return;
     showOpenMenu = false;
-    try {
-      const { path } = await getSessionDirectory(session.id);
-      const ok = await copyToClipboard(path);
-      showFeedback(ok ? "Path copied!" : "Failed");
-    } catch {
+    if (!sessionDir) {
       showFeedback("No path available");
+      return;
     }
+    const ok = await copyToClipboard(sessionDir);
+    showFeedback(ok ? "Path copied!" : "Failed");
   }
 
   async function handleOpenIn(opener: Opener) {
@@ -224,9 +232,12 @@
     openers.filter((o) => o.kind === "files"),
   );
 
-  // Always show for any session — at minimum "Copy directory
-  // path" is available via the server-side resolution endpoint.
-  const showDropdown = $derived(!!session);
+  const showDropdown = $derived(
+    canResume ||
+    editorOpeners.length > 0 ||
+    fileOpeners.length > 0 ||
+    sessionDir !== null,
+  );
 
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === "Escape") {
