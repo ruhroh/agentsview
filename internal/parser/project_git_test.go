@@ -334,6 +334,43 @@ func TestExtractProjectFromCwd_RepoSiblingWithWorktree(
 	}
 }
 
+func TestExtractProjectFromCwd_MainRepoWithOwnWorktrees(
+	t *testing.T,
+) {
+	// A container with a main checkout (.git dir) alongside
+	// linked worktrees of the SAME repo should still resolve
+	// to the repo root, not fall back to basename.
+	root := t.TempDir()
+
+	mainRepo := filepath.Join(root, "container", "my-project")
+	mustMkdirAll(t, filepath.Join(
+		mainRepo, ".git", "worktrees", "feature",
+	))
+
+	worktree := filepath.Join(root, "container", "my-project-feature")
+	mustMkdirAll(t, worktree)
+	gitDir := filepath.Join(
+		mainRepo, ".git", "worktrees", "feature",
+	)
+	mustWriteFile(t, filepath.Join(worktree, ".git"),
+		"gitdir: "+gitDir+"\n")
+	mustWriteFile(t, filepath.Join(gitDir, "commondir"),
+		"../..\n")
+
+	deleted := filepath.Join(
+		root, "container", "my-project-hotfix",
+	)
+
+	got := ExtractProjectFromCwd(deleted)
+	// Main repo and worktree agree on same root.
+	if got != "my_project" {
+		t.Fatalf(
+			"ExtractProjectFromCwd(%q) = %q, want %q",
+			deleted, got, "my_project",
+		)
+	}
+}
+
 func TestExtractProjectFromCwdWithBranch_NestedWorktree(
 	t *testing.T,
 ) {

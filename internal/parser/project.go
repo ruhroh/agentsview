@@ -279,10 +279,17 @@ func repoRootFromSiblings(dir string) string {
 		if err != nil {
 			continue
 		}
-		// A child with a .git directory means this is not a
-		// dedicated worktree container — bail out.
+		// A child with a .git directory is a normal repo.
+		// Include it in the unanimity vote so same-repo
+		// layouts (main checkout + worktrees) still resolve.
 		if info.IsDir() {
-			return ""
+			candidate := filepath.Join(dir, entry.Name())
+			if found == "" {
+				found = candidate
+			} else if found != candidate {
+				return ""
+			}
+			continue
 		}
 		if !info.Mode().IsRegular() {
 			continue

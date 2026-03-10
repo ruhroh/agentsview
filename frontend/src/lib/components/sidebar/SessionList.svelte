@@ -213,7 +213,8 @@
   }
 
   // Scroll to the active session when it changes (e.g. from
-  // the command palette). Skips if already visible.
+  // the command palette). Expands collapsed agent groups and
+  // scrolls the item into view. Skips if already visible.
   $effect(() => {
     const activeId = sessions.activeSessionId;
     if (!activeId || !containerRef) return;
@@ -222,7 +223,22 @@
         it.type === "session" &&
         it.group?.sessions.some((s) => s.id === activeId),
     );
-    if (!item) return;
+    if (!item) {
+      // Session may be hidden inside a collapsed agent group.
+      // Find and expand the owning agent so the next effect
+      // cycle can locate the item.
+      if (!groupByAgent) return;
+      for (const section of agentSections) {
+        const owns = section.groups.some((g) =>
+          g.sessions.some((s) => s.id === activeId),
+        );
+        if (owns && collapsedAgents.has(section.agent)) {
+          toggleAgent(section.agent);
+          return;
+        }
+      }
+      return;
+    }
     const itemBottom = item.top + item.height;
     const viewTop = containerRef.scrollTop;
     const viewBottom = viewTop + containerRef.clientHeight;
