@@ -184,9 +184,14 @@ class SyncStore {
     handle.done
       .then((s: SyncStats) => {
         this.lastSyncStats = s;
+        // Mark lastSync as "just completed" so the poller
+        // cannot see stale state before loadStatus returns.
+        // Any non-null value that won't match the server's
+        // old timestamp prevents a duplicate notification.
+        this.lastSync = new Date().toISOString();
         this.loadStats();
-        this.notifySyncComplete();
         finalizeSync();
+        this.notifySyncComplete();
         // Hydrate the authoritative server timestamp so
         // the next poll does not see a stale lastSync and
         // fire a duplicate notification.
