@@ -269,7 +269,14 @@ func repoRootFromSiblings(dir string) string {
 	worktreeMarker := string(filepath.Separator) + ".git" +
 		string(filepath.Separator) + "worktrees" +
 		string(filepath.Separator)
-	var found string
+	// Two-pass scan: first collect linked-worktree roots,
+	// then optionally include .git directory siblings only
+	// when worktree evidence exists.
+	type siblingInfo struct {
+		root  string // resolved repo root
+		isDir bool   // true = .git directory, false = .git file
+	}
+	var siblings []siblingInfo
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -279,16 +286,11 @@ func repoRootFromSiblings(dir string) string {
 		if err != nil {
 			continue
 		}
-		// A child with a .git directory is a normal repo.
-		// Include it in the unanimity vote so same-repo
-		// layouts (main checkout + worktrees) still resolve.
 		if info.IsDir() {
-			candidate := filepath.Join(dir, entry.Name())
-			if found == "" {
-				found = candidate
-			} else if found != candidate {
-				return ""
-			}
+			siblings = append(siblings, siblingInfo{
+				root:  filepath.Join(dir, entry.Name()),
+				isDir: true,
+			})
 			continue
 		}
 		if !info.Mode().IsRegular() {
@@ -311,11 +313,30 @@ func repoRootFromSiblings(dir string) string {
 		if root == "" {
 			continue
 		}
+		siblings = append(siblings, siblingInfo{
+			root:  root,
+			isDir: false,
+		})
+	}
+
+	// Require at least one linked-worktree sibling.
+	hasWorktree := false
+	for _, s := range siblings {
+		if !s.isDir {
+			hasWorktree = true
+			break
+		}
+	}
+	if !hasWorktree {
+		return ""
+	}
+
+	// All candidates must agree on the same root.
+	var found string
+	for _, s := range siblings {
 		if found == "" {
-			found = root
-		} else if found != root {
-			// Siblings disagree — not a single-project
-			// container, so bail out.
+			found = s.root
+		} else if found != s.root {
 			return ""
 		}
 	}

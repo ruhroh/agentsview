@@ -371,6 +371,30 @@ func TestExtractProjectFromCwd_MainRepoWithOwnWorktrees(
 	}
 }
 
+func TestExtractProjectFromCwd_DeletedSiblingOfNormalRepo(
+	t *testing.T,
+) {
+	// A deleted path next to a single normal repo (no linked
+	// worktrees) must NOT be claimed by that repo. Without
+	// worktree evidence, sibling detection should not fire.
+	root := t.TempDir()
+
+	container := filepath.Join(root, "container")
+	normalRepo := filepath.Join(container, "my-project")
+	mustMkdirAll(t, filepath.Join(normalRepo, ".git"))
+
+	// Deleted path — just a former directory, not a worktree.
+	deleted := filepath.Join(container, "scratch-old")
+
+	got := ExtractProjectFromCwd(deleted)
+	if got != "scratch_old" {
+		t.Fatalf(
+			"ExtractProjectFromCwd(%q) = %q, want %q",
+			deleted, got, "scratch_old",
+		)
+	}
+}
+
 func TestExtractProjectFromCwdWithBranch_NestedWorktree(
 	t *testing.T,
 ) {
