@@ -184,17 +184,16 @@ class SyncStore {
     handle.done
       .then((s: SyncStats) => {
         this.lastSyncStats = s;
-        // Mark lastSync as "just completed" so the poller
-        // cannot see stale state before loadStatus returns.
-        // Any non-null value that won't match the server's
-        // old timestamp prevents a duplicate notification.
-        this.lastSync = new Date().toISOString();
+        // Set lastSync to second-precision ISO format
+        // matching the server's RFC3339 output, so the
+        // next poll won't see a format mismatch.
+        const now = new Date();
+        now.setMilliseconds(0);
+        this.lastSync = now.toISOString().replace(".000Z", "Z");
         this.loadStats();
         finalizeSync();
         this.notifySyncComplete();
-        // Hydrate the authoritative server timestamp so
-        // the next poll does not see a stale lastSync and
-        // fire a duplicate notification.
+        // Hydrate the authoritative server timestamp.
         this.loadStatus({ notify: false });
         onComplete?.();
       })
