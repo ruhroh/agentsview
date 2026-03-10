@@ -181,15 +181,13 @@ class SyncStore {
     });
 
     handle.done
-      .then((s: SyncStats) => {
+      .then(async (s: SyncStats) => {
         this.lastSyncStats = s;
-        this.loadStats();
-        this.notifySyncComplete();
         finalizeSync();
-        // Hydrate lastSync from the server so the next
-        // poll sees the authoritative timestamp and does
-        // not trigger a spurious "changed" notification.
-        this.loadStatus();
+        // Hydrate lastSync from the server, which fires
+        // notifySyncComplete() via the changed-timestamp
+        // path exactly once.
+        await this.loadStatus();
         onComplete?.();
       })
       .catch((err: unknown) => {
