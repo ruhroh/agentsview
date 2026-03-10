@@ -49,12 +49,19 @@ function readBlockFilters(): Set<BlockType> {
 const LAYOUT_KEY = "agentsview-message-layout";
 const ZOOM_KEY = "agentsview-zoom-level";
 
+const IS_DESKTOP =
+  typeof window !== "undefined" &&
+  new URLSearchParams(window.location.search).has(
+    "desktop",
+  );
+
 const ZOOM_STEPS = [
   67, 75, 80, 90, 100, 110, 125, 150, 175, 200,
 ];
 const ZOOM_DEFAULT = 100;
 
 function readStoredZoom(): number {
+  if (!IS_DESKTOP) return ZOOM_DEFAULT;
   try {
     const raw = localStorage?.getItem(ZOOM_KEY);
     if (raw) {
@@ -141,9 +148,12 @@ class UIStore {
       });
 
       $effect(() => {
+        if (!IS_DESKTOP) return;
         // "zoom" is non-standard but supported in WebKit/Chromium
-        (document.documentElement.style as Record<string, string>)
-          .zoom = String(this.zoomLevel / 100);
+        (
+          document.documentElement.style as unknown as
+            Record<string, string>
+        ).zoom = String(this.zoomLevel / 100);
         try {
           localStorage?.setItem(
             ZOOM_KEY,

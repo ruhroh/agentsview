@@ -31,32 +31,34 @@
   </div>
 
   <div class="status-right">
-    <div class="zoom-controls">
-      <button
-        class="zoom-btn"
-        onclick={() => ui.zoomOut()}
-        disabled={ui.zoomLevel <= 67}
-        title="Zoom out (Cmd+-)"
-      >
-        &minus;
-      </button>
-      <button
-        class="zoom-level"
-        onclick={() => ui.resetZoom()}
-        title="Reset zoom (Cmd+0)"
-      >
-        {ui.zoomLevel}%
-      </button>
-      <button
-        class="zoom-btn"
-        onclick={() => ui.zoomIn()}
-        disabled={ui.zoomLevel >= 200}
-        title="Zoom in (Cmd++)"
-      >
-        +
-      </button>
-    </div>
-    <span class="sep">&middot;</span>
+    {#if sync.isDesktop}
+      <div class="zoom-controls">
+        <button
+          class="zoom-btn"
+          onclick={() => ui.zoomOut()}
+          disabled={ui.zoomLevel <= 67}
+          title="Zoom out (Cmd+-)"
+        >
+          &minus;
+        </button>
+        <button
+          class="zoom-level"
+          onclick={() => ui.resetZoom()}
+          title="Reset zoom (Cmd+0)"
+        >
+          {ui.zoomLevel}%
+        </button>
+        <button
+          class="zoom-btn"
+          onclick={() => ui.zoomIn()}
+          disabled={ui.zoomLevel >= 200}
+          title="Zoom in (Cmd++)"
+        >
+          +
+        </button>
+      </div>
+      <span class="sep">&middot;</span>
+    {/if}
     {#if sync.updateAvailable && !sync.isDesktop}
       <button
         class="update-available"

@@ -118,7 +118,13 @@ fn spawn_sidecar(app: &App) -> Result<(CommandRx, CommandChild), DynError> {
 fn init_navigation_guard_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
     PluginBuilder::new("navigation-guard")
         .on_navigation(|webview, url| {
-            if is_allowed_navigation_url(url) {
+            let backend_port = webview
+                .app_handle()
+                .try_state::<SidecarState>()
+                .and_then(|state| {
+                    state.backend_port.lock().ok().and_then(|g| *g)
+                });
+            if is_allowed_navigation_url(url, backend_port) {
                 return true;
             }
             if is_allowed_external_open_url(url) {
@@ -140,13 +146,19 @@ fn init_navigation_guard_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlug
         .build()
 }
 
-fn is_allowed_navigation_url(url: &Url) -> bool {
+fn is_allowed_navigation_url(url: &Url, backend_port: Option<u16>) -> bool {
     if url.scheme() == "tauri" && url.host_str() == Some("localhost") {
         return true;
     }
-    // Allow any port on 127.0.0.1. External URLs are
-    // opened in the system browser by the caller.
-    url.scheme() == "http" && url.host_str() == Some(HOST) && url.port().is_some()
+    // Only allow navigation to the known sidecar port on
+    // localhost. Rejects all localhost URLs when the sidecar
+    // port is not yet known.
+    if let Some(port) = backend_port {
+        return url.scheme() == "http"
+            && url.host_str() == Some(HOST)
+            && url.port() == Some(port);
+    }
+    false
 }
 
 fn is_allowed_external_open_url(url: &Url) -> bool {
@@ -900,17 +912,24 @@ mod tests {
     #[test]
     fn is_allowed_navigation_url_allows_local_only() {
         let tauri_url = Url::parse("tauri://localhost/index.html").expect("valid tauri url");
-        assert!(is_allowed_navigation_url(&tauri_url));
+        assert!(is_allowed_navigation_url(&tauri_url, None));
+        assert!(is_allowed_navigation_url(&tauri_url, Some(18080)));
 
         let local_backend = Url::parse("http://127.0.0.1:18080/").expect("valid localhost url");
-        assert!(is_allowed_navigation_url(&local_backend));
+        assert!(is_allowed_navigation_url(&local_backend, Some(18080)));
+
+        // Reject when port is unknown
+        assert!(!is_allowed_navigation_url(&local_backend, None));
+
+        // Reject when port doesn't match
+        assert!(!is_allowed_navigation_url(&local_backend, Some(9999)));
 
         let remote = Url::parse("https://example.com/").expect("valid remote url");
-        assert!(!is_allowed_navigation_url(&remote));
+        assert!(!is_allowed_navigation_url(&remote, Some(18080)));
 
         let localhost_name =
             Url::parse("http://localhost:18080/").expect("valid localhost-name url");
-        assert!(!is_allowed_navigation_url(&localhost_name));
+        assert!(!is_allowed_navigation_url(&localhost_name, Some(18080)));
     }
 
     #[test]

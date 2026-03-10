@@ -1,7 +1,8 @@
 <script lang="ts">
   import { ui } from "../../stores/ui.svelte.js";
+  import { sync } from "../../stores/sync.svelte.js";
 
-  const shortcuts = [
+  const baseShortcuts = [
     { key: "Cmd+K", action: "Open command palette" },
     { key: "Esc", action: "Close palette / modal" },
     { key: "j / \u2193", action: "Next message" },
@@ -15,11 +16,18 @@
     { key: "e", action: "Export session" },
     { key: "p", action: "Publish to Gist" },
     { key: "c", action: "Copy resume command" },
+    { key: "?", action: "Show this modal" },
+  ];
+
+  const zoomShortcuts = [
     { key: "Cmd++", action: "Zoom in" },
     { key: "Cmd+-", action: "Zoom out" },
     { key: "Cmd+0", action: "Reset zoom" },
-    { key: "?", action: "Show this modal" },
   ];
+
+  const shortcuts = sync.isDesktop
+    ? [...baseShortcuts, ...zoomShortcuts]
+    : baseShortcuts;
 
   function handleOverlayClick(e: MouseEvent) {
     if (
