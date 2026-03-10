@@ -67,19 +67,21 @@ func TestExtractProjectFromCwd(t *testing.T) {
 		{cwd: ".."},
 	}
 
-	// Platform-specific behavior for Windows paths
+	// Windows drive-letter paths are normalized cross-platform.
+	tests = append(tests, []struct{ cwd, want string }{
+		{cwd: `C:\Users\me\my-app`, want: "my_app"},
+		{cwd: `D:\projects\frontend`, want: "frontend"},
+	}...)
+	// Mixed path: on Windows filepath treats \ as separator,
+	// on POSIX it is a literal filename character.
 	if runtime.GOOS == "windows" {
-		tests = append(tests, []struct{ cwd, want string }{
-			{cwd: `C:\Users\me\my-app`, want: "my_app"},
-			{cwd: `D:\projects\frontend`, want: "frontend"},
-			{cwd: `/mixed\path/to\project`, want: "project"},
-		}...)
+		tests = append(tests, struct{ cwd, want string }{
+			cwd: `/mixed\path/to\project`, want: "project",
+		})
 	} else {
-		tests = append(tests, []struct{ cwd, want string }{
-			{cwd: `C:\Users\me\my-app`},
-			{cwd: `D:\projects\frontend`},
-			{cwd: `/mixed\path/to\project`},
-		}...)
+		tests = append(tests, struct{ cwd, want string }{
+			cwd: `/mixed\path/to\project`,
+		})
 	}
 
 	for _, tt := range tests {
@@ -338,6 +340,16 @@ func TestDecodeContent(t *testing.T) {
 		{"multiple array blocks", `[{"type":"text","text":"foo"},{"type":"text","text":"bar"}]`, "foobar"},
 		{"empty raw", "", ""},
 		{"non-text array block ignored", `[{"type":"image"}]`, ""},
+		{
+			"iFlow object with nested output",
+			`{"responseParts":{"functionResponse":{"response":{"output":"hello world"}}}}`,
+			"hello world",
+		},
+		{
+			"iFlow object without nested output",
+			`{"other":"data"}`,
+			"",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -346,6 +358,53 @@ func TestDecodeContent(t *testing.T) {
 				t.Errorf("DecodeContent(%q) = %q, want %q", tt.raw, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestExtractTextContent_IflowToolResult(t *testing.T) {
+	// iFlow tool results use an object with nested output.
+	content := `[{
+		"type":"tool_result",
+		"tool_use_id":"tu_123",
+		"content":{"responseParts":{"functionResponse":{"response":{"output":"result text"}}}}
+	}]`
+	_, _, _, _, trs := ExtractTextContent(gjson.Parse(content))
+	if len(trs) != 1 {
+		t.Fatalf("expected 1 tool result, got %d", len(trs))
+	}
+	tr := trs[0]
+	if tr.ToolUseID != "tu_123" {
+		t.Errorf("ToolUseID = %q, want %q", tr.ToolUseID, "tu_123")
+	}
+	if tr.ContentLength != len("result text") {
+		t.Errorf(
+			"ContentLength = %d, want %d",
+			tr.ContentLength, len("result text"),
+		)
+	}
+	decoded := DecodeContent(tr.ContentRaw)
+	if decoded != "result text" {
+		t.Errorf(
+			"DecodeContent = %q, want %q", decoded, "result text",
+		)
+	}
+
+	// Object without nested output: both length and decode
+	// should be zero/empty.
+	noOutput := `[{
+		"type":"tool_result",
+		"tool_use_id":"tu_456",
+		"content":{"other":"data"}
+	}]`
+	_, _, _, _, trs2 := ExtractTextContent(gjson.Parse(noOutput))
+	if len(trs2) != 1 {
+		t.Fatalf("expected 1 tool result, got %d", len(trs2))
+	}
+	if trs2[0].ContentLength != 0 {
+		t.Errorf("ContentLength = %d, want 0", trs2[0].ContentLength)
+	}
+	if d := DecodeContent(trs2[0].ContentRaw); d != "" {
+		t.Errorf("DecodeContent = %q, want empty", d)
 	}
 }
 

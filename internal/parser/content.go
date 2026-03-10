@@ -95,6 +95,13 @@ func toolResultContentLength(content gjson.Result) int {
 		})
 		return total
 	}
+	// iFlow tool results use an object with nested output at
+	// responseParts.functionResponse.response.output.
+	if content.IsObject() {
+		return len(content.Get(
+			"responseParts.functionResponse.response.output",
+		).Str)
+	}
 	return 0
 }
 
@@ -118,6 +125,12 @@ func decodeContent(content gjson.Result) string {
 			return true
 		})
 		return strings.Join(parts, "")
+	}
+	// iFlow tool results use an object with nested output.
+	if content.IsObject() {
+		return content.Get(
+			"responseParts.functionResponse.response.output",
+		).Str
 	}
 	return ""
 }

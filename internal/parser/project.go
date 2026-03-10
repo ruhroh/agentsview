@@ -3,6 +3,7 @@ package parser
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"unicode"
 )
@@ -76,13 +77,28 @@ func ExtractProjectFromCwdWithBranch(
 	if cwd == "" {
 		return ""
 	}
-	cleaned := filepath.Clean(cwd)
-	if root := findGitRepoRoot(cleaned); root != "" {
-		name := filepath.Base(root)
-		if isInvalidPathBase(name) {
-			return ""
+	winPath := looksLikeWindowsPath(cwd)
+	norm := cwd
+	if winPath {
+		norm = strings.ReplaceAll(cwd, "\\", "/")
+	}
+	cleaned := filepath.Clean(norm)
+
+	// On non-Windows, a converted Windows path like "C:/Users/..."
+	// is treated as relative by filepath and would cause
+	// findGitRepoRoot to walk up from the process CWD. Skip git
+	// root detection only for foreign Windows paths on POSIX;
+	// on actual Windows hosts, drive-letter paths are native and
+	// git root detection must still run.
+	foreignWinPath := winPath && runtime.GOOS != "windows"
+	if !foreignWinPath {
+		if root := findGitRepoRoot(cleaned); root != "" {
+			name := filepath.Base(root)
+			if isInvalidPathBase(name) {
+				return ""
+			}
+			return NormalizeName(name)
 		}
-		return NormalizeName(name)
 	}
 
 	name := filepath.Base(cleaned)
@@ -94,6 +110,23 @@ func ExtractProjectFromCwdWithBranch(
 		return ""
 	}
 	return NormalizeName(name)
+}
+
+// looksLikeWindowsPath returns true when cwd appears to use
+// Windows path conventions: a drive letter (e.g. "C:\...") or a
+// UNC prefix ("\\server\..."). On POSIX, backslash is a legal
+// filename character so we must not blindly rewrite it.
+func looksLikeWindowsPath(cwd string) bool {
+	if len(cwd) >= 3 && cwd[1] == ':' && cwd[2] == '\\' {
+		c := cwd[0]
+		if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') {
+			return true
+		}
+	}
+	if strings.HasPrefix(cwd, "\\\\") {
+		return true
+	}
+	return false
 }
 
 func isInvalidPathBase(name string) bool {
