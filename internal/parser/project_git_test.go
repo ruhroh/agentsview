@@ -294,6 +294,46 @@ func TestExtractProjectFromCwd_AncestorHasGitDir(
 	}
 }
 
+func TestExtractProjectFromCwd_RepoSiblingWithWorktree(
+	t *testing.T,
+) {
+	// A container with a normal repo (.git dir) alongside a
+	// linked worktree from a different project is not a
+	// dedicated worktree container. Sibling detection must
+	// bail out to avoid misattributing the deleted path.
+	root := t.TempDir()
+
+	normalRepo := filepath.Join(root, "container", "repo-a")
+	mustMkdirAll(t, filepath.Join(normalRepo, ".git"))
+
+	otherRepo := filepath.Join(root, "repo-b")
+	mustMkdirAll(t, filepath.Join(
+		otherRepo, ".git", "worktrees", "feature-b",
+	))
+
+	worktree := filepath.Join(root, "container", "feature-b")
+	mustMkdirAll(t, worktree)
+	gitDirB := filepath.Join(
+		otherRepo, ".git", "worktrees", "feature-b",
+	)
+	mustWriteFile(t, filepath.Join(worktree, ".git"),
+		"gitdir: "+gitDirB+"\n")
+	mustWriteFile(t, filepath.Join(gitDirB, "commondir"),
+		"../..\n")
+
+	deleted := filepath.Join(root, "container", "deleted-dir")
+
+	got := ExtractProjectFromCwd(deleted)
+	// Container has a normal repo child, not a worktree-only
+	// container. Falls back to basename.
+	if got != "deleted_dir" {
+		t.Fatalf(
+			"ExtractProjectFromCwd(%q) = %q, want %q",
+			deleted, got, "deleted_dir",
+		)
+	}
+}
+
 func TestExtractProjectFromCwdWithBranch_NestedWorktree(
 	t *testing.T,
 ) {

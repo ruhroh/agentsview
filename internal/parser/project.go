@@ -236,7 +236,15 @@ func repoRootFromSiblings(dir string) string {
 		}
 		gitPath := filepath.Join(dir, entry.Name(), ".git")
 		info, err := os.Stat(gitPath)
-		if err != nil || !info.Mode().IsRegular() {
+		if err != nil {
+			continue
+		}
+		// A child with a .git directory means this is not a
+		// dedicated worktree container — bail out.
+		if info.IsDir() {
+			return ""
+		}
+		if !info.Mode().IsRegular() {
 			continue
 		}
 		gitDir := readGitDirFromFile(gitPath)
