@@ -162,6 +162,7 @@
   });
 
   function showAbout() {
+    if (ui.activeModal === "resync" && sync.syncing) return;
     ui.activeModal = "about";
   }
 

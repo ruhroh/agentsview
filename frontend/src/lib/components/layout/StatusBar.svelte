@@ -64,7 +64,10 @@
       <button
         class="version"
         title="Build: {sync.serverVersion.commit}"
-        onclick={() => (ui.activeModal = "about")}
+        onclick={() => {
+          if (ui.activeModal === "resync" && sync.syncing) return;
+          ui.activeModal = "about";
+        }}
       >
         {sync.serverVersion.version}
       </button>
