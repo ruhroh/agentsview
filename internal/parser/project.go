@@ -238,10 +238,9 @@ func repoRootFromSiblings(dir string) string {
 			continue
 		}
 		if !filepath.IsAbs(gitDir) {
-			gitDir = filepath.Clean(
-				filepath.Join(dir, entry.Name(), gitDir),
-			)
+			gitDir = filepath.Join(dir, entry.Name(), gitDir)
 		}
+		gitDir = filepath.Clean(gitDir)
 		if !strings.Contains(gitDir, worktreeMarker) {
 			continue
 		}
