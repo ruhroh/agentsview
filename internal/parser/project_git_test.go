@@ -422,6 +422,18 @@ func TestExtractProjectFromCwdWithBranch(t *testing.T) {
 			branch: "",
 			want:   "agentsview",
 		},
+		{
+			name:   "ConductorWorktreeFlat",
+			cwd:    filepath.FromSlash("/Users/wesm/conductor/workspaces/my-app/feature-branch"),
+			branch: "feature-branch",
+			want:   "my_app",
+		},
+		{
+			name:   "ConductorWorktreeNested",
+			cwd:    filepath.FromSlash("/Users/wesm/conductor/workspaces/my-app/fix/auth-bug"),
+			branch: "fix/auth-bug",
+			want:   "my_app",
+		},
 	}
 
 	for _, tt := range tests {

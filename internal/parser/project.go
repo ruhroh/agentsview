@@ -101,8 +101,9 @@ func ExtractProjectFromCwdWithBranch(
 		}
 	}
 
-	// Recognize superset worktree layout:
+	// Recognize worktree manager layouts:
 	// .superset/worktrees/$PROJECT/$BRANCH[/...]
+	// conductor/workspaces/$PROJECT/$BRANCH[/...]
 	if p := projectFromWorktreeLayout(cleaned); p != "" {
 		return NormalizeName(p)
 	}
@@ -118,24 +119,37 @@ func ExtractProjectFromCwdWithBranch(
 	return NormalizeName(name)
 }
 
-// projectFromWorktreeLayout detects the superset worktree
-// directory convention: .superset/worktrees/$PROJECT/$BRANCH.
-// Returns the project name component, or "" if the path does
-// not match.
-func projectFromWorktreeLayout(path string) string {
+// worktreeLayoutMarkers are path fragments that identify
+// worktree manager directory conventions. Each encodes
+// .../$MARKER/$PROJECT/$BRANCH[/...].
+var worktreeLayoutMarkers []string
+
+func init() {
 	sep := string(filepath.Separator)
-	marker := sep + ".superset" + sep + "worktrees" + sep
-	_, rest, found := strings.Cut(path, marker)
-	if !found {
-		return ""
+	worktreeLayoutMarkers = []string{
+		sep + ".superset" + sep + "worktrees" + sep,
+		sep + "conductor" + sep + "workspaces" + sep,
 	}
-	// Require at least project/branch to distinguish from the
-	// container directory itself.
-	projEnd := strings.IndexByte(rest, filepath.Separator)
-	if projEnd <= 0 {
-		return ""
+}
+
+// projectFromWorktreeLayout detects known worktree manager
+// directory layouts and extracts the project name component.
+// Returns "" if the path does not match any known layout.
+func projectFromWorktreeLayout(path string) string {
+	for _, marker := range worktreeLayoutMarkers {
+		_, rest, found := strings.Cut(path, marker)
+		if !found {
+			continue
+		}
+		// Require at least project/branch to distinguish
+		// from the container directory itself.
+		projEnd := strings.IndexByte(rest, filepath.Separator)
+		if projEnd <= 0 {
+			continue
+		}
+		return rest[:projEnd]
 	}
-	return rest[:projEnd]
+	return ""
 }
 
 // looksLikeWindowsPath returns true when cwd appears to use
