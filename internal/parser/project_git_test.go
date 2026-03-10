@@ -404,6 +404,24 @@ func TestExtractProjectFromCwdWithBranch(t *testing.T) {
 			branch: "main",
 			want:   "project_main",
 		},
+		{
+			name:   "SupersetWorktreeFlat",
+			cwd:    filepath.FromSlash("/Users/wesm/.superset/worktrees/agentsview/tauri-packaging"),
+			branch: "tauri-packaging",
+			want:   "agentsview",
+		},
+		{
+			name:   "SupersetWorktreeNested",
+			cwd:    filepath.FromSlash("/Users/wesm/.superset/worktrees/agentsview/fix/worktrees"),
+			branch: "fix/worktrees",
+			want:   "agentsview",
+		},
+		{
+			name:   "SupersetWorktreeContainerOnly",
+			cwd:    filepath.FromSlash("/Users/wesm/.superset/worktrees/agentsview"),
+			branch: "",
+			want:   "agentsview",
+		},
 	}
 
 	for _, tt := range tests {

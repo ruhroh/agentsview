@@ -101,6 +101,12 @@ func ExtractProjectFromCwdWithBranch(
 		}
 	}
 
+	// Recognize superset worktree layout:
+	// .superset/worktrees/$PROJECT/$BRANCH[/...]
+	if p := projectFromWorktreeLayout(cleaned); p != "" {
+		return NormalizeName(p)
+	}
+
 	name := filepath.Base(cleaned)
 	if isInvalidPathBase(name) {
 		return ""
@@ -110,6 +116,26 @@ func ExtractProjectFromCwdWithBranch(
 		return ""
 	}
 	return NormalizeName(name)
+}
+
+// projectFromWorktreeLayout detects the superset worktree
+// directory convention: .superset/worktrees/$PROJECT/$BRANCH.
+// Returns the project name component, or "" if the path does
+// not match.
+func projectFromWorktreeLayout(path string) string {
+	sep := string(filepath.Separator)
+	marker := sep + ".superset" + sep + "worktrees" + sep
+	_, rest, found := strings.Cut(path, marker)
+	if !found {
+		return ""
+	}
+	// Require at least project/branch to distinguish from the
+	// container directory itself.
+	projEnd := strings.IndexByte(rest, filepath.Separator)
+	if projEnd <= 0 {
+		return ""
+	}
+	return rest[:projEnd]
 }
 
 // looksLikeWindowsPath returns true when cwd appears to use
