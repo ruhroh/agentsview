@@ -47,6 +47,25 @@ function readBlockFilters(): Set<BlockType> {
 }
 
 const LAYOUT_KEY = "agentsview-message-layout";
+const ZOOM_KEY = "agentsview-zoom-level";
+
+const ZOOM_STEPS = [
+  67, 75, 80, 90, 100, 110, 125, 150, 175, 200,
+];
+const ZOOM_DEFAULT = 100;
+
+function readStoredZoom(): number {
+  try {
+    const raw = localStorage?.getItem(ZOOM_KEY);
+    if (raw) {
+      const val = Number(raw);
+      if (ZOOM_STEPS.includes(val)) return val;
+    }
+  } catch {
+    // ignore
+  }
+  return ZOOM_DEFAULT;
+}
 const VALID_LAYOUTS: MessageLayout[] = [
   "default",
   "compact",
@@ -87,6 +106,8 @@ class UIStore {
   pendingScrollOrdinal: number | null = $state(null);
   pendingScrollSession: string | null = $state(null);
 
+  zoomLevel: number = $state(readStoredZoom());
+
   /** Set of block types currently visible. */
   visibleBlocks: Set<BlockType> = $state(readBlockFilters());
 
@@ -113,6 +134,20 @@ class UIStore {
           localStorage?.setItem(
             LAYOUT_KEY,
             this.messageLayout,
+          );
+        } catch {
+          // ignore
+        }
+      });
+
+      $effect(() => {
+        // "zoom" is non-standard but supported in WebKit/Chromium
+        (document.documentElement.style as Record<string, string>)
+          .zoom = String(this.zoomLevel / 100);
+        try {
+          localStorage?.setItem(
+            ZOOM_KEY,
+            String(this.zoomLevel),
           );
         } catch {
           // ignore
@@ -214,6 +249,24 @@ class UIStore {
     this.selectedOrdinal = ordinal;
     this.pendingScrollOrdinal = ordinal;
     this.pendingScrollSession = sessionId ?? null;
+  }
+
+  zoomIn() {
+    const idx = ZOOM_STEPS.indexOf(this.zoomLevel);
+    if (idx < ZOOM_STEPS.length - 1) {
+      this.zoomLevel = ZOOM_STEPS[idx + 1]!;
+    }
+  }
+
+  zoomOut() {
+    const idx = ZOOM_STEPS.indexOf(this.zoomLevel);
+    if (idx > 0) {
+      this.zoomLevel = ZOOM_STEPS[idx - 1]!;
+    }
+  }
+
+  resetZoom() {
+    this.zoomLevel = ZOOM_DEFAULT;
   }
 
   closeAll() {

@@ -15,6 +15,9 @@
     { key: "e", action: "Export session" },
     { key: "p", action: "Publish to Gist" },
     { key: "c", action: "Copy resume command" },
+    { key: "Cmd++", action: "Zoom in" },
+    { key: "Cmd+-", action: "Zoom out" },
+    { key: "Cmd+0", action: "Reset zoom" },
     { key: "?", action: "Show this modal" },
   ];
 
