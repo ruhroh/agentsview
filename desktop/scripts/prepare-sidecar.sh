@@ -155,7 +155,12 @@ main() {
 
   local version commit build_date ldflags tmp_dir build_bin
   version="$(resolve_version)"
-  patch_tauri_version "$version"
+  # Only patch tauri.conf.json when AGENTSVIEW_VERSION is
+  # explicitly set (CI/release). Local dev builds skip this
+  # to avoid dirtying the working tree.
+  if [ -n "${AGENTSVIEW_VERSION:-}" ]; then
+    patch_tauri_version "$version"
+  fi
   commit="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo "unknown")"
   build_date="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   ldflags="-X main.version=$version -X main.commit=$commit -X main.buildDate=$build_date -s -w"
