@@ -622,6 +622,7 @@ func (e *Engine) ResyncAll(
 
 	// Abort swap when the fresh DB would be worse than the
 	// original:
+	// - sync was cancelled (partial rebuild)
 	// - nothing synced at all (empty discovery, or all skipped)
 	//   when old DB had data
 	// - more files failed than succeeded (permission errors,
@@ -631,7 +632,8 @@ func (e *Engine) ResyncAll(
 	emptyDiscovery := stats.filesDiscovered == 0 &&
 		stats.filesOK == 0 &&
 		oldFileSessions > 0
-	abortSwap := emptyDiscovery ||
+	abortSwap := stats.Aborted ||
+		emptyDiscovery ||
 		(stats.Synced == 0 && stats.TotalSessions > 0) ||
 		(stats.Failed > 0 && stats.Failed > stats.filesOK)
 	if abortSwap {
@@ -865,6 +867,16 @@ func (e *Engine) syncAllLocked(
 			stats.Synced, stats.Skipped,
 			time.Since(tWorkers).Round(time.Millisecond),
 		)
+	}
+
+	// If cancelled, return partial stats immediately without
+	// running further phases or mutating state.
+	if stats.Aborted {
+		e.mu.Lock()
+		e.lastSync = time.Now()
+		e.lastSyncStats = stats
+		e.mu.Unlock()
+		return stats
 	}
 
 	// Sync OpenCode sessions (DB-backed, not file-based).

@@ -2988,3 +2988,55 @@ func TestIncrementalSync_CodexAppend(t *testing.T) {
 		}
 	}
 }
+
+func TestResyncAllCancelledPreservesOriginalDB(t *testing.T) {
+	env := setupTestEnv(t)
+
+	// Seed the DB with a session via Claude JSONL.
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "hello").
+		AddClaudeAssistant(tsEarlyS5, "world").
+		String()
+	env.writeClaudeSession(
+		t, "cancel-project", "cancel-sess.jsonl", content,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	// Verify session exists with messages.
+	sess, err := env.db.GetSession(
+		context.Background(), "cancel-sess",
+	)
+	if err != nil || sess == nil {
+		t.Fatalf("session not found: %v", err)
+	}
+	origCount := sess.MessageCount
+	if origCount == 0 {
+		t.Fatal("expected messages after initial sync")
+	}
+
+	// Cancel the context before starting ResyncAll so
+	// collectAndBatch aborts immediately.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	stats := env.engine.ResyncAll(ctx, nil)
+
+	if !stats.Aborted {
+		t.Fatal("expected ResyncAll to report Aborted")
+	}
+
+	// Original DB should be preserved — session still
+	// has the original data.
+	sess, err = env.db.GetSession(
+		context.Background(), "cancel-sess",
+	)
+	if err != nil || sess == nil {
+		t.Fatal("session lost after cancelled resync")
+	}
+	if sess.MessageCount != origCount {
+		t.Errorf(
+			"message count = %d, want %d",
+			sess.MessageCount, origCount,
+		)
+	}
+}
