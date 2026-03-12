@@ -151,8 +151,13 @@ fn is_allowed_navigation_url(url: &Url, backend_port: Option<u16>) -> bool {
     if url.scheme() == "tauri" && url.host_str() == Some("localhost") {
         return true;
     }
-    // Windows (WebView2): http://tauri.localhost or https://tauri.localhost
-    if matches!(url.scheme(), "http" | "https") && url.host_str() == Some("tauri.localhost") {
+    // Windows (WebView2): https://tauri.localhost (default origin).
+    // Restrict to https-only with no explicit port to avoid accepting
+    // spoofable http origins or unexpected ports.
+    if url.scheme() == "https"
+        && url.host_str() == Some("tauri.localhost")
+        && url.port().is_none()
+    {
         return true;
     }
     // Only allow navigation to the known sidecar port on
@@ -921,16 +926,21 @@ mod tests {
         assert!(is_allowed_navigation_url(&tauri_url, None));
         assert!(is_allowed_navigation_url(&tauri_url, Some(18080)));
 
-        // Windows (WebView2): http://tauri.localhost
-        let win_url =
-            Url::parse("http://tauri.localhost/index.html").expect("valid windows tauri url");
-        assert!(is_allowed_navigation_url(&win_url, None));
-        assert!(is_allowed_navigation_url(&win_url, Some(18080)));
-
-        // Windows with https
+        // Windows (WebView2): https://tauri.localhost (default origin)
         let win_https =
-            Url::parse("https://tauri.localhost/index.html").expect("valid windows https url");
+            Url::parse("https://tauri.localhost/index.html").expect("valid windows tauri url");
         assert!(is_allowed_navigation_url(&win_https, None));
+        assert!(is_allowed_navigation_url(&win_https, Some(18080)));
+
+        // Reject http://tauri.localhost (not the default WebView2 scheme)
+        let win_http =
+            Url::parse("http://tauri.localhost/index.html").expect("valid http tauri url");
+        assert!(!is_allowed_navigation_url(&win_http, None));
+
+        // Reject tauri.localhost with an explicit port
+        let win_port =
+            Url::parse("https://tauri.localhost:9999/").expect("valid tauri localhost with port");
+        assert!(!is_allowed_navigation_url(&win_port, None));
 
         let local_backend = Url::parse("http://127.0.0.1:18080/").expect("valid localhost url");
         assert!(is_allowed_navigation_url(&local_backend, Some(18080)));

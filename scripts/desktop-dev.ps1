@@ -38,7 +38,12 @@ $DesktopDir = Join-Path $RepoRoot "desktop"
 $FrontendDir = Join-Path $RepoRoot "frontend"
 $EmbedDir = Join-Path $RepoRoot "internal\web\dist"
 $BinDir = Join-Path $DesktopDir "src-tauri\binaries"
-$Triple = "x86_64-pc-windows-msvc"
+# Detect Rust host triple for the sidecar binary name
+$Triple = (rustc -vV | Select-String "^host:").ToString().Split(" ", 2)[1].Trim()
+if (-not $Triple) {
+    Write-Error "Could not detect Rust host triple. Is rustc installed?"
+    exit 1
+}
 $SidecarBin = Join-Path $BinDir "agentsview-$Triple.exe"
 
 if (-not $SkipBuild) {
