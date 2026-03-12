@@ -398,6 +398,53 @@ func TestParseClaudeSessionFrom_DAGDetected(
 	assert.ErrorIs(t, err, ErrDAGDetected)
 }
 
+func TestParseClaudeSessionFrom_DAGAcrossNonUUID(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	initial := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("hello", tsEarly),
+	)
+	path := createTestFile(
+		t, "inc-dag-gap.jsonl", initial,
+	)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	offset := info.Size()
+
+	// Append: UUID entry, then a non-UUID entry (no uuid
+	// field), then another UUID entry whose parentUuid
+	// doesn't match the first UUID entry. The non-UUID gap
+	// must not prevent fork detection.
+	line1 := `{"type":"user","uuid":"u1",` +
+		`"parentUuid":"pre",` +
+		`"timestamp":"` + tsEarlyS5 +
+		`","message":{"content":"a"}}` + "\n"
+	noUUID := `{"type":"user",` +
+		`"timestamp":"` + tsLate +
+		`","message":{"content":"gap"}}` + "\n"
+	line2 := `{"type":"assistant","uuid":"u2",` +
+		`"parentUuid":"other",` +
+		`"timestamp":"` + tsLate +
+		`","message":{"content":[` +
+		`{"type":"text","text":"b"}]}}` + "\n"
+
+	f, err := os.OpenFile(
+		path, os.O_APPEND|os.O_WRONLY, 0o644,
+	)
+	require.NoError(t, err)
+	_, err = f.WriteString(line1 + noUUID + line2)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	_, _, _, err = ParseClaudeSessionFrom(
+		path, offset, 1,
+	)
+	assert.ErrorIs(t, err, ErrDAGDetected)
+}
+
 func TestParseClaudeSessionFrom_LinearUUID(
 	t *testing.T,
 ) {

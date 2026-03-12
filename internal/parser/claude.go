@@ -280,21 +280,16 @@ func ParseClaudeSessionFrom(
 // (each entry parenting the next) are safe for incremental
 // parsing; forks require full DAG processing.
 func hasDAGFork(entries []dagEntry) bool {
-	for i, e := range entries {
+	var lastUUID string
+	for _, e := range entries {
 		if e.uuid == "" {
 			continue // non-UUID entries are always linear
 		}
-		if i == 0 {
-			// First appended entry — its parentUuid
-			// points into the pre-existing data which we
-			// can't verify here, so accept it.
-			continue
-		}
-		prev := entries[i-1]
-		if prev.uuid != "" &&
-			e.parentUuid != prev.uuid {
+		if lastUUID != "" &&
+			e.parentUuid != lastUUID {
 			return true
 		}
+		lastUUID = e.uuid
 	}
 	return false
 }
