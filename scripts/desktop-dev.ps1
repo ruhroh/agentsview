@@ -16,6 +16,52 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function ConvertTo-Semver {
+    param([string]$Raw)
+    # Strip leading 'v'
+    $Raw = $Raw -replace '^v', ''
+    # git-describe: 0.10.0-3-gabcdef -> 0.10.0-dev.3
+    if ($Raw -match '^(\d+\.\d+\.\d+)-(\d+)-g[0-9a-f]+(-dirty)?$') {
+        return "$($Matches[1])-dev.$($Matches[2])"
+    }
+    # Already semver, with optional prerelease (strip -dirty)
+    if ($Raw -match '^\d+\.\d+\.\d+(-[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)*)?(-dirty)?$') {
+        return ($Raw -replace '-dirty$', '')
+    }
+    # Looks like a version but isn't valid semver
+    if ($Raw -match '^\d+\.') {
+        Write-Error "Malformed version tag: $Raw"
+        exit 1
+    }
+    # Non-tag fallback (bare hash, "dev", etc.)
+    return ""
+}
+
+function Update-TauriVersion {
+    param([string]$Version, [string]$ConfPath)
+    $semver = ConvertTo-Semver $Version
+    if (-not $semver) {
+        Write-Host "Skipping tauri.conf.json version patch (non-tag build: $Version)"
+        return
+    }
+    $origPath = "$ConfPath.orig"
+    if (-not (Test-Path $origPath)) {
+        Copy-Item $ConfPath $origPath
+    }
+    $content = Get-Content $ConfPath -Raw
+    $content = $content -replace '"version":\s*"[^"]*"', "`"version`": `"$semver`""
+    Set-Content -Path $ConfPath -Value $content -NoNewline
+    Write-Host "Patched tauri.conf.json version to $semver" -ForegroundColor Green
+}
+
+function Restore-TauriVersion {
+    param([string]$ConfPath)
+    $origPath = "$ConfPath.orig"
+    if (Test-Path $origPath) {
+        Move-Item -Force $origPath $ConfPath
+    }
+}
+
 # Ensure fnm-managed Node.js is on PATH. fnm requires an `fnm env`
 # eval in each new PowerShell session; without it, node/npm are not
 # found even though fnm itself is on PATH via WinGet links.
@@ -88,6 +134,10 @@ if (-not $SkipBuild) {
     Copy-Item (Join-Path $RepoRoot "agentsview.exe") $SidecarBin -Force
 
     Write-Host "Sidecar ready: $SidecarBin" -ForegroundColor Green
+
+    # Patch tauri.conf.json version to match the git-derived version
+    $TauriConf = Join-Path $DesktopDir "src-tauri\tauri.conf.json"
+    Update-TauriVersion -Version $version -ConfPath $TauriConf
 } else {
     if (-not (Test-Path $SidecarBin)) {
         Write-Error "Sidecar binary not found at $SidecarBin. Run without -SkipBuild first."
@@ -101,10 +151,12 @@ if (-not $SkipBuild) {
 # built-in dev server opening a browser tab (port 1430) that shows a
 # stale "Preparing your workspace" page. The app manages its own
 # webview navigation from the splash screen to the Go backend.
+$TauriConf = Join-Path $DesktopDir "src-tauri\tauri.conf.json"
 Write-Host "Launching Tauri dev..." -ForegroundColor Cyan
 Push-Location (Join-Path $DesktopDir "src-tauri")
 try {
     cargo run
 } finally {
     Pop-Location
+    Restore-TauriVersion -ConfPath $TauriConf
 }
