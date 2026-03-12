@@ -1746,7 +1746,9 @@ func (e *Engine) writeBatch(batch []pendingWrite) {
 			log.Printf("upsert session %s: %v", s.ID, err)
 			continue
 		}
-		e.writeMessages(pw.sess.ID, msgs)
+		if err := e.writeMessages(pw.sess.ID, msgs); err != nil {
+			log.Printf("%v", err)
+		}
 	}
 }
 
@@ -1776,10 +1778,17 @@ func (e *Engine) writeIncremental(inc *incrementalUpdate) {
 		endedAt = &s
 	}
 
-	// Write messages before advancing file_size so that a
-	// message insert failure doesn't leave the offset past
-	// unprocessed data.
-	e.writeMessages(inc.sessionID, dbMsgs)
+	// Write messages first — only advance file_size when
+	// the insert succeeds so a failure is retried.
+	if err := e.writeMessages(
+		inc.sessionID, dbMsgs,
+	); err != nil {
+		log.Printf(
+			"incremental messages %s: %v",
+			inc.sessionID, err,
+		)
+		return
+	}
 
 	err := e.db.UpdateSessionIncremental(
 		inc.sessionID, endedAt,
@@ -1801,18 +1810,18 @@ func (e *Engine) writeIncremental(inc *incrementalUpdate) {
 // delete+reinsert of existing content).
 func (e *Engine) writeMessages(
 	sessionID string, msgs []db.Message,
-) {
+) error {
 	maxOrd := e.db.MaxOrdinal(sessionID)
 
 	// No existing messages — insert all.
 	if maxOrd < 0 {
 		if err := e.db.InsertMessages(msgs); err != nil {
-			log.Printf(
-				"insert messages for %s: %v",
+			return fmt.Errorf(
+				"insert messages for %s: %w",
 				sessionID, err,
 			)
 		}
-		return
+		return nil
 	}
 
 	// Find new messages (ordinal > maxOrd).
@@ -1826,15 +1835,16 @@ func (e *Engine) writeMessages(
 	}
 
 	if delta == 0 {
-		return
+		return nil
 	}
 
 	if err := e.db.InsertMessages(msgs); err != nil {
-		log.Printf(
-			"append messages for %s: %v",
+		return fmt.Errorf(
+			"append messages for %s: %w",
 			sessionID, err,
 		)
 	}
+	return nil
 }
 
 // writeSessionFull upserts a session and does a full
