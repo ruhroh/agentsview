@@ -889,14 +889,16 @@ func (e *Engine) syncAllLocked(
 	ocPending := e.syncOpenCode(ctx)
 	if len(ocPending) > 0 {
 		stats.TotalSessions += len(ocPending)
-		stats.RecordSynced(len(ocPending))
 		tWrite := time.Now()
+		var ocWritten int
 		for _, pw := range ocPending {
 			if ctx.Err() != nil {
 				break
 			}
 			e.writeSessionFull(pw)
+			ocWritten++
 		}
+		stats.RecordSynced(ocWritten)
 		if verbose {
 			log.Printf(
 				"opencode write: %d sessions in %s",
