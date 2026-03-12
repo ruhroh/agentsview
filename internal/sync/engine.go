@@ -128,7 +128,7 @@ func (e *Engine) SyncPaths(paths []string) {
 	e.syncMu.Lock()
 	defer e.syncMu.Unlock()
 
-	results := e.startWorkers(files)
+	results := e.startWorkers(context.Background(), files)
 	stats := e.collectAndBatch(
 		context.Background(), results, len(files), nil,
 	)
@@ -861,7 +861,7 @@ func (e *Engine) syncAllLocked(
 	}
 
 	tWorkers := time.Now()
-	results := e.startWorkers(all)
+	results := e.startWorkers(ctx, all)
 	stats := e.collectAndBatch(
 		ctx, results, len(all), onProgress,
 	)
@@ -1020,8 +1020,11 @@ func (e *Engine) syncOneOpenCode(
 }
 
 // startWorkers fans out file processing across a worker pool
-// and returns a channel of results.
+// and returns a channel of results. When ctx is cancelled,
+// workers skip remaining jobs with a context error instead
+// of parsing files.
 func (e *Engine) startWorkers(
+	ctx context.Context,
 	files []parser.DiscoveredFile,
 ) <-chan syncJob {
 	workers := min(max(runtime.NumCPU(), 2), maxWorkers)
@@ -1032,6 +1035,15 @@ func (e *Engine) startWorkers(
 	for range workers {
 		go func() {
 			for file := range jobs {
+				if ctx.Err() != nil {
+					results <- syncJob{
+						processResult: processResult{
+							err: ctx.Err(),
+						},
+						path: file.Path,
+					}
+					continue
+				}
 				results <- syncJob{
 					processResult: e.processFile(file),
 					path:          file.Path,
