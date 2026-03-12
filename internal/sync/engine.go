@@ -1749,7 +1749,10 @@ func (e *Engine) writeBatch(batch []pendingWrite) {
 // parent_session_id, relationship_type).
 func (e *Engine) writeIncremental(inc *incrementalUpdate) {
 	dbMsgs := toDBMessages(
-		pendingWrite{msgs: inc.msgs},
+		pendingWrite{
+			sess: parser.ParsedSession{ID: inc.sessionID},
+			msgs: inc.msgs,
+		},
 		e.blockedResultCategories,
 	)
 
@@ -1766,6 +1769,11 @@ func (e *Engine) writeIncremental(inc *incrementalUpdate) {
 		endedAt = &s
 	}
 
+	// Write messages before advancing file_size so that a
+	// message insert failure doesn't leave the offset past
+	// unprocessed data.
+	e.writeMessages(inc.sessionID, dbMsgs)
+
 	err := e.db.UpdateSessionIncremental(
 		inc.sessionID, endedAt,
 		msgCount, userMsgCount,
@@ -1776,10 +1784,7 @@ func (e *Engine) writeIncremental(inc *incrementalUpdate) {
 			"incremental update %s: %v",
 			inc.sessionID, err,
 		)
-		return
 	}
-
-	e.writeMessages(inc.sessionID, dbMsgs)
 }
 
 // writeMessages uses an incremental append when possible.
