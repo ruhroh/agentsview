@@ -9,10 +9,8 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"syscall"
 	"time"
 	_ "time/tzdata"
@@ -34,8 +32,6 @@ const (
 	periodicSyncInterval  = 15 * time.Minute
 	unwatchedPollInterval = 2 * time.Minute
 	watcherDebounce       = 500 * time.Millisecond
-	browserPollInterval   = 100 * time.Millisecond
-	browserPollAttempts   = 60
 )
 
 func main() {
@@ -94,7 +90,6 @@ Server flags:
   -tls-cert string    TLS certificate path for managed Caddy HTTPS mode
   -tls-key string     TLS key path for managed Caddy HTTPS mode
   -allowed-subnet str Client CIDR allowed to connect to the managed proxy
-  -no-browser         Don't open browser on startup
 
 Sync flags:
   -full              Force a full resync regardless of data version
@@ -250,6 +245,11 @@ func runServe(args []string) {
 		}
 	}
 
+	ctx, stop := signal.NotifyContext(
+		context.Background(), os.Interrupt, syscall.SIGTERM,
+	)
+	defer stop()
+
 	srv := server.New(cfg, database, engine,
 		server.WithVersion(server.VersionInfo{
 			Version:   version,
@@ -257,12 +257,8 @@ func runServe(args []string) {
 			BuildDate: buildDate,
 		}),
 		server.WithDataDir(cfg.DataDir),
+		server.WithBaseContext(ctx),
 	)
-
-	ctx, stop := signal.NotifyContext(
-		context.Background(), os.Interrupt, syscall.SIGTERM,
-	)
-	defer stop()
 
 	serveErrCh := make(chan error, 1)
 	go func() {
@@ -340,10 +336,6 @@ func runServe(args []string) {
 			version, localURL, publicURL,
 			time.Since(start).Round(time.Millisecond),
 		)
-	}
-
-	if !cfg.NoBrowser {
-		go openBrowser(publicURL)
 	}
 
 	var caddyErrCh <-chan error
@@ -621,29 +613,4 @@ func startUnwatchedPoll(engine *sync.Engine) {
 		log.Println("Polling unwatched directories...")
 		engine.SyncAll(nil)
 	}
-}
-
-func openBrowser(url string) {
-	for range browserPollAttempts {
-		time.Sleep(browserPollInterval)
-		resp, err := http.Get(url + "/api/v1/stats")
-		if err == nil {
-			resp.Body.Close()
-			break
-		}
-	}
-
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("open", url)
-	case "linux":
-		cmd = exec.Command("xdg-open", url)
-	case "windows":
-		cmd = exec.Command("rundll32",
-			"url.dll,FileProtocolHandler", url)
-	default:
-		return
-	}
-	_ = cmd.Run()
 }

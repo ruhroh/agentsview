@@ -63,9 +63,8 @@ patterns over time.
 ## Usage
 
 ```bash
-agentsview              # start server, open browser
+agentsview              # start server
 agentsview -port 9090   # custom port
-agentsview -no-browser  # headless mode
 ```
 
 On startup, agentsview discovers sessions from all supported

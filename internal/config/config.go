@@ -54,7 +54,6 @@ type ProxyConfig struct {
 type Config struct {
 	Host                 string         `json:"host"`
 	Port                 int            `json:"port"`
-	NoBrowser            bool           `json:"no_browser"`
 	DataDir              string         `json:"data_dir"`
 	DBPath               string         `json:"-"`
 	PublicURL            string         `json:"public_url,omitempty"`
@@ -422,8 +421,6 @@ func applyFlags(cfg *Config, fs *flag.FlagSet) {
 			cfg.Proxy.TLSKey = f.Value.String()
 		case "allowed-subnet":
 			cfg.Proxy.AllowedSubnets = splitFlagList(f.Value.String())
-		case "no-browser":
-			cfg.NoBrowser = f.Value.String() == "true"
 		}
 	})
 }

@@ -38,6 +38,11 @@ type Server struct {
 	version VersionInfo
 	dataDir string
 
+	// baseCtx, when set, is used as the base context for all
+	// incoming requests. Cancelling it causes SSE handlers to
+	// exit promptly, which unblocks graceful shutdown.
+	baseCtx context.Context
+
 	generateStreamFunc insight.GenerateStreamFunc
 	spaFS              fs.FS
 	spaHandler         http.Handler
@@ -90,6 +95,14 @@ func WithVersion(v VersionInfo) Option {
 // WithDataDir sets the data directory used for update caching.
 func WithDataDir(dir string) Option {
 	return func(s *Server) { s.dataDir = dir }
+}
+
+// WithBaseContext sets the base context for all incoming HTTP
+// requests. When this context is cancelled, request contexts
+// are also cancelled, causing long-lived handlers (SSE) to
+// exit and unblocking graceful shutdown.
+func WithBaseContext(ctx context.Context) Option {
+	return func(s *Server) { s.baseCtx = ctx }
 }
 
 // WithUpdateChecker overrides the update check function,
@@ -520,6 +533,12 @@ func (s *Server) ListenAndServe() error {
 		Handler:     s.Handler(),
 		ReadTimeout: 10 * time.Second,
 		IdleTimeout: 120 * time.Second,
+	}
+	if s.baseCtx != nil {
+		ctx := s.baseCtx
+		srv.BaseContext = func(_ net.Listener) context.Context {
+			return ctx
+		}
 	}
 	s.mu.Lock()
 	s.httpSrv = srv
