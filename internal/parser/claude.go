@@ -210,11 +210,23 @@ func ParseClaudeSessionFrom(
 	offset int64,
 	startOrdinal int,
 ) ([]ParsedMessage, time.Time, int64, error) {
-	var entries []dagEntry
-	lineIndex := startOrdinal
+	var (
+		entries   []dagEntry
+		lineIndex = startOrdinal
+		// Track latest timestamp from all lines, including
+		// non-message events (progress, queue-operation) so
+		// callers can update ended_at even when no new
+		// messages are found.
+		latestTS time.Time
+	)
 
 	consumed, err := readJSONLFrom(
 		path, offset, func(line string) {
+			if ts := extractTimestamp(line); !ts.IsZero() {
+				if ts.After(latestTS) {
+					latestTS = ts
+				}
+			}
 			entryType := gjson.Get(line, "type").Str
 			if entryType != "user" &&
 				entryType != "assistant" {
@@ -240,7 +252,7 @@ func ParseClaudeSessionFrom(
 	}
 
 	if len(entries) == 0 {
-		return nil, time.Time{}, consumed, nil
+		return nil, latestTS, consumed, nil
 	}
 
 	// Detect forks: if any entry's parentUuid doesn't
@@ -253,6 +265,12 @@ func ParseClaudeSessionFrom(
 	msgs, _, endedAt := extractMessagesFrom(
 		entries, startOrdinal,
 	)
+	// Use the latest timestamp from all lines (including
+	// non-message events) if it's later than what
+	// extractMessagesFrom found.
+	if latestTS.After(endedAt) {
+		endedAt = latestTS
+	}
 	return msgs, endedAt, consumed, nil
 }
 

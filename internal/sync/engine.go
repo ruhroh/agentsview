@@ -1346,11 +1346,14 @@ func (e *Engine) tryIncrementalJSONL(
 	if len(newMsgs) == 0 {
 		// No new messages, but advance the offset past
 		// non-message lines (progress events, metadata)
-		// so they aren't re-read on every sync.
+		// so they aren't re-read on every sync. Carry
+		// endedAt forward so session bounds stay current
+		// with non-message timestamps (e.g. progress).
 		if consumed > 0 {
 			return processResult{
 				incremental: &incrementalUpdate{
 					sessionID:    inc.ID,
+					endedAt:      endedAt,
 					msgCount:     inc.MsgCount,
 					userMsgCount: inc.UserMsgCount,
 					fileSize:     newOffset,
@@ -2072,6 +2075,13 @@ func (e *Engine) SyncSingleSession(sessionID string) error {
 		return res.err
 	}
 	if res.skip {
+		return nil
+	}
+
+	// Handle incremental updates from processFile (e.g.
+	// append-only JSONL that was already synced).
+	if res.incremental != nil {
+		e.writeIncremental(res.incremental)
 		return nil
 	}
 
