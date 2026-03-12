@@ -62,7 +62,7 @@ func assertSessionProject(t *testing.T, database *db.DB, sessionID string, want 
 
 func runSyncAndAssert(t *testing.T, engine *sync.Engine, want sync.SyncStats) sync.SyncStats {
 	t.Helper()
-	stats := engine.SyncAll(nil)
+	stats := engine.SyncAll(context.Background(), nil)
 	if diff := cmp.Diff(want, stats,
 		cmpopts.IgnoreUnexported(sync.SyncStats{}),
 	); diff != "" {

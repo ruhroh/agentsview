@@ -475,14 +475,16 @@ func cleanResyncTemp(dbPath string) {
 func runInitialSync(engine *sync.Engine) {
 	fmt.Println("Running initial sync...")
 	t := time.Now()
-	stats := engine.SyncAll(printSyncProgress)
+	ctx := context.Background()
+	stats := engine.SyncAll(ctx, printSyncProgress)
 	printSyncSummary(stats, t)
 }
 
 func runInitialResync(engine *sync.Engine) {
 	fmt.Println("Data version changed, running full resync...")
 	t := time.Now()
-	stats := engine.ResyncAll(printSyncProgress)
+	ctx := context.Background()
+	stats := engine.ResyncAll(ctx, printSyncProgress)
 	printSyncSummary(stats, t)
 
 	// If resync was aborted (swap didn't happen), fall back
@@ -491,7 +493,7 @@ func runInitialResync(engine *sync.Engine) {
 	if stats.Aborted {
 		fmt.Println("Resync incomplete, running incremental sync...")
 		t = time.Now()
-		fallback := engine.SyncAll(printSyncProgress)
+		fallback := engine.SyncAll(ctx, printSyncProgress)
 		printSyncSummary(fallback, t)
 	}
 }
@@ -602,7 +604,7 @@ func startPeriodicSync(engine *sync.Engine) {
 	defer ticker.Stop()
 	for range ticker.C {
 		log.Println("Running scheduled sync...")
-		engine.SyncAll(nil)
+		engine.SyncAll(context.Background(), nil)
 	}
 }
 
@@ -611,6 +613,6 @@ func startUnwatchedPoll(engine *sync.Engine) {
 	defer ticker.Stop()
 	for range ticker.C {
 		log.Println("Polling unwatched directories...")
-		engine.SyncAll(nil)
+		engine.SyncAll(context.Background(), nil)
 	}
 }

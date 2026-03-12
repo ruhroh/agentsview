@@ -2253,7 +2253,7 @@ func TestWatchSession_Events(t *testing.T) {
 		},
 		Machine: "test",
 	})
-	engine.SyncAll(nil)
+	engine.SyncAll(context.Background(), nil)
 
 	ctx, cancel := context.WithTimeout(
 		context.Background(), 5*time.Second,
@@ -2306,7 +2306,7 @@ func TestWatchSession_FileDisappearAndResolve(t *testing.T) {
 		},
 		Machine: "test",
 	})
-	engine.SyncAll(nil)
+	engine.SyncAll(context.Background(), nil)
 
 	ctx, cancel := context.WithTimeout(
 		context.Background(), 15*time.Second,

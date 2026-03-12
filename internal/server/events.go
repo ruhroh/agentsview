@@ -218,12 +218,12 @@ func (s *Server) handleTriggerSync(
 	stream, err := NewSSEStream(w)
 	if err != nil {
 		// Non-streaming fallback
-		stats := s.engine.SyncAll(nil)
+		stats := s.engine.SyncAll(r.Context(), nil)
 		writeJSON(w, http.StatusOK, stats)
 		return
 	}
 
-	stats := s.engine.SyncAll(func(p syncpkg.Progress) {
+	stats := s.engine.SyncAll(r.Context(), func(p syncpkg.Progress) {
 		stream.SendJSON("progress", p)
 	})
 	stream.SendJSON("done", stats)
@@ -234,12 +234,12 @@ func (s *Server) handleTriggerResync(
 ) {
 	stream, err := NewSSEStream(w)
 	if err != nil {
-		stats := s.engine.ResyncAll(nil)
+		stats := s.engine.ResyncAll(r.Context(), nil)
 		writeJSON(w, http.StatusOK, stats)
 		return
 	}
 
-	stats := s.engine.ResyncAll(func(p syncpkg.Progress) {
+	stats := s.engine.ResyncAll(r.Context(), func(p syncpkg.Progress) {
 		stream.SendJSON("progress", p)
 	})
 	stream.SendJSON("done", stats)

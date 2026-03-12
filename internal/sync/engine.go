@@ -130,7 +130,7 @@ func (e *Engine) SyncPaths(paths []string) {
 
 	results := e.startWorkers(files)
 	stats := e.collectAndBatch(
-		results, len(files), nil,
+		context.Background(), results, len(files), nil,
 	)
 	e.persistSkipCache()
 
@@ -551,7 +551,7 @@ const resyncTempSuffix = "-resync"
 // handle. This avoids the per-row trigger overhead of bulk
 // deleting hundreds of thousands of messages in place.
 func (e *Engine) ResyncAll(
-	onProgress ProgressFunc,
+	ctx context.Context, onProgress ProgressFunc,
 ) SyncStats {
 	e.syncMu.Lock()
 	defer e.syncMu.Unlock()
@@ -565,8 +565,9 @@ func (e *Engine) ResyncAll(
 	// OpenCode) so OpenCode-only datasets don't trigger the
 	// guard. Fail closed: if we can't query, assume old DB
 	// has file-backed data worth protecting.
-	ctx := context.Background()
-	oldFileSessions, err := origDB.FileBackedSessionCount(ctx)
+	oldFileSessions, err := origDB.FileBackedSessionCount(
+		context.Background(),
+	)
 	if err != nil {
 		log.Printf("resync: get old file count: %v", err)
 		oldFileSessions = 1
@@ -616,7 +617,7 @@ func (e *Engine) ResyncAll(
 
 	// 3. Point engine at newDB and sync into it.
 	e.db = newDB
-	stats := e.syncAllLocked(onProgress)
+	stats := e.syncAllLocked(ctx, onProgress)
 	e.db = origDB // restore immediately
 
 	// Abort swap when the fresh DB would be worse than the
@@ -801,14 +802,16 @@ func removeWAL(path string) {
 }
 
 // SyncAll discovers and syncs all session files from all agents.
-func (e *Engine) SyncAll(onProgress ProgressFunc) SyncStats {
+func (e *Engine) SyncAll(
+	ctx context.Context, onProgress ProgressFunc,
+) SyncStats {
 	e.syncMu.Lock()
 	defer e.syncMu.Unlock()
-	return e.syncAllLocked(onProgress)
+	return e.syncAllLocked(ctx, onProgress)
 }
 
 func (e *Engine) syncAllLocked(
-	onProgress ProgressFunc,
+	ctx context.Context, onProgress ProgressFunc,
 ) SyncStats {
 	t0 := time.Now()
 
@@ -854,7 +857,7 @@ func (e *Engine) syncAllLocked(
 	tWorkers := time.Now()
 	results := e.startWorkers(all)
 	stats := e.collectAndBatch(
-		results, len(all), onProgress,
+		ctx, results, len(all), onProgress,
 	)
 	if verbose {
 		log.Printf(
@@ -1001,7 +1004,10 @@ func (e *Engine) startWorkers(
 
 // collectAndBatch drains the results channel, batches
 // successful parses, and writes them to the database.
+// When ctx is cancelled, it stops processing new results
+// and returns partial stats.
 func (e *Engine) collectAndBatch(
+	ctx context.Context,
 	results <-chan syncJob, total int,
 	onProgress ProgressFunc,
 ) SyncStats {
@@ -1017,6 +1023,12 @@ func (e *Engine) collectAndBatch(
 	var pending []pendingWrite
 
 	for range total {
+		select {
+		case <-ctx.Done():
+			stats.Aborted = true
+			goto flush
+		default:
+		}
 		r := <-results
 
 		if r.err != nil {
@@ -1078,6 +1090,7 @@ func (e *Engine) collectAndBatch(
 		}
 	}
 
+flush:
 	if len(pending) > 0 {
 		stats.RecordSynced(len(pending))
 		progress.MessagesIndexed += countMessages(pending)

@@ -29,7 +29,7 @@ func TestServerTimeouts(t *testing.T) {
 	)
 
 	// Seed the DB.
-	te.engine.SyncAll(nil)
+	te.engine.SyncAll(context.Background(), nil)
 
 	baseURL := te.listenAndServe(t)
 

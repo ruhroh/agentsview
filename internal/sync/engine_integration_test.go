@@ -355,7 +355,7 @@ func TestSyncEngineProgress(t *testing.T) {
 	}
 
 	var progressCalls int
-	env.engine.SyncAll(func(p sync.Progress) {
+	env.engine.SyncAll(context.Background(), func(p sync.Progress) {
 		progressCalls++
 	})
 
@@ -472,7 +472,7 @@ func TestSyncSingleSessionReplacesContent(
 		t, "test-proj", "replace-test.jsonl", original,
 	)
 
-	env.engine.SyncAll(nil)
+	env.engine.SyncAll(context.Background(), nil)
 	assertMessageContent(
 		t, env.db, "replace-test",
 		"original question", "original answer",
@@ -511,7 +511,7 @@ func TestSyncSingleSessionHash(t *testing.T) {
 		t, "test-proj", "single-hash.jsonl", content,
 	)
 
-	env.engine.SyncAll(nil)
+	env.engine.SyncAll(context.Background(), nil)
 	env.assertResyncRoundTrip(t, "single-hash")
 }
 
@@ -532,7 +532,7 @@ func TestSyncSingleSessionHashCodex(t *testing.T) {
 
 	sessionID := "codex:" + uuid
 
-	env.engine.SyncAll(nil)
+	env.engine.SyncAll(context.Background(), nil)
 	env.assertResyncRoundTrip(t, sessionID)
 }
 
@@ -559,7 +559,7 @@ func TestSyncSingleSessionCodexExecBypassesCache(
 	)
 
 	// SyncAll skips exec-originated sessions (nil result).
-	env.engine.SyncAll(nil)
+	env.engine.SyncAll(context.Background(), nil)
 	sess, _ := env.db.GetSession(
 		context.Background(), "codex:"+uuid,
 	)
@@ -594,7 +594,7 @@ func TestSyncEngineTombstoneClearOnMtimeChange(t *testing.T) {
 	)
 
 	// First sync
-	env.engine.SyncAll(nil)
+	env.engine.SyncAll(context.Background(), nil)
 
 	// Replace with valid content
 	valid := testjsonl.NewSessionBuilder().
@@ -623,7 +623,7 @@ func TestSyncSingleSessionProjectFallback(t *testing.T) {
 	)
 
 	// 2. Initial sync - should get "default-proj"
-	env.engine.SyncAll(nil)
+	env.engine.SyncAll(context.Background(), nil)
 
 	assertSessionProject(t, env.db, "fallback-test", "default_proj")
 
@@ -1310,7 +1310,7 @@ func TestSyncEngineOpenCodeBulkSync(t *testing.T) {
 	)
 
 	// First SyncAll should discover and store the session.
-	env.engine.SyncAll(nil)
+	env.engine.SyncAll(context.Background(), nil)
 
 	agentviewID := "opencode:" + sessionID
 	assertSessionState(t, env.db, agentviewID,
@@ -1338,7 +1338,7 @@ func TestSyncEngineOpenCodeBulkSync(t *testing.T) {
 	oc.updateSessionTime(t, sessionID, timeUpdated+1000)
 
 	// Second SyncAll should fully replace messages.
-	env.engine.SyncAll(nil)
+	env.engine.SyncAll(context.Background(), nil)
 
 	assertMessageContent(
 		t, env.db, agentviewID,
@@ -1347,7 +1347,7 @@ func TestSyncEngineOpenCodeBulkSync(t *testing.T) {
 
 	// Third SyncAll with no changes should be a no-op
 	// (time_updated unchanged, so session is skipped).
-	env.engine.SyncAll(nil)
+	env.engine.SyncAll(context.Background(), nil)
 
 	assertMessageContent(
 		t, env.db, agentviewID,
@@ -1390,7 +1390,7 @@ func TestSyncEngineOpenCodeToolCallReplace(t *testing.T) {
 		"bash", "call-1", timeCreated+1,
 	)
 
-	env.engine.SyncAll(nil)
+	env.engine.SyncAll(context.Background(), nil)
 
 	agentviewID := "opencode:" + sessionID
 	assertToolCallCount(t, env.db, agentviewID, 1)
@@ -1415,7 +1415,7 @@ func TestSyncEngineOpenCodeToolCallReplace(t *testing.T) {
 	)
 	oc.updateSessionTime(t, sessionID, timeUpdated+1000)
 
-	env.engine.SyncAll(nil)
+	env.engine.SyncAll(context.Background(), nil)
 
 	assertMessageContent(
 		t, env.db, agentviewID,
@@ -1475,7 +1475,7 @@ func TestSyncEngineConcurrentSerialization(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		env.engine.SyncAll(syncProgress)
+		env.engine.SyncAll(context.Background(), syncProgress)
 	}()
 
 	// Wait until SyncAll is inside the locked section.
@@ -1483,7 +1483,7 @@ func TestSyncEngineConcurrentSerialization(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		env.engine.ResyncAll(resyncProgress)
+		env.engine.ResyncAll(context.Background(), resyncProgress)
 	}()
 
 	// ResyncAll should be blocked on the mutex. Give it
@@ -1590,7 +1590,7 @@ func TestSyncSingleSessionPostFilterCounts(t *testing.T) {
 	)
 
 	// SyncAll to populate the session in the DB.
-	env.engine.SyncAll(nil)
+	env.engine.SyncAll(context.Background(), nil)
 
 	// Corrupt stored counts and clear mtime so
 	// SyncSingleSession re-parses via writeSessionFull.
@@ -1867,7 +1867,7 @@ func TestResyncAllReplacesMessageContent(t *testing.T) {
 	}
 
 	// Normal SyncAll should skip (file unchanged on disk).
-	stats := env.engine.SyncAll(nil)
+	stats := env.engine.SyncAll(context.Background(), nil)
 	if stats.Skipped != 1 {
 		t.Fatalf("expected 1 skip, got %d", stats.Skipped)
 	}
@@ -1882,7 +1882,7 @@ func TestResyncAllReplacesMessageContent(t *testing.T) {
 	hadFTS := env.db.HasFTS()
 
 	// ResyncAll should re-parse and replace message content.
-	env.engine.ResyncAll(nil)
+	env.engine.ResyncAll(context.Background(), nil)
 	msgs = fetchMessages(t, env.db, fullID)
 	if len(msgs) != 2 {
 		t.Fatalf("got %d messages after resync, want 2",
@@ -1937,7 +1937,7 @@ func TestResyncAllPreservesInsights(t *testing.T) {
 		t, "test-proj", "insight-test.jsonl", content,
 	)
 
-	env.engine.SyncAll(nil)
+	env.engine.SyncAll(context.Background(), nil)
 	assertSessionMessageCount(t, env.db, "insight-test", 2)
 
 	// Insert an insight into the DB.
@@ -1954,7 +1954,7 @@ func TestResyncAllPreservesInsights(t *testing.T) {
 
 	// ResyncAll should rebuild sessions and preserve
 	// insights.
-	stats := env.engine.ResyncAll(nil)
+	stats := env.engine.ResyncAll(context.Background(), nil)
 	if stats.Synced == 0 {
 		t.Fatal("expected at least 1 synced session")
 	}
@@ -1993,7 +1993,7 @@ func TestResyncAllAbortsOnFailures(t *testing.T) {
 		t, "test-proj", "abort-test.jsonl", content,
 	)
 
-	env.engine.SyncAll(nil)
+	env.engine.SyncAll(context.Background(), nil)
 	assertSessionMessageCount(t, env.db, "abort-test", 2)
 
 	if runtime.GOOS == "windows" {
@@ -2016,7 +2016,7 @@ func TestResyncAllAbortsOnFailures(t *testing.T) {
 		os.Chmod(sessionPath, 0o644)
 	})
 
-	stats := env.engine.ResyncAll(nil)
+	stats := env.engine.ResyncAll(context.Background(), nil)
 
 	if stats.Failed == 0 {
 		t.Fatalf("expected failures, got 0")
@@ -2121,7 +2121,7 @@ func TestResyncAllAbortsWithForkAndFailures(t *testing.T) {
 	// Initial sync: all 3 files parse fine.
 	// Fork file produces 2 sessions: "forked" (10 msgs)
 	// and "forked-i" (2 msgs).
-	env.engine.SyncAll(nil)
+	env.engine.SyncAll(context.Background(), nil)
 	assertSessionMessageCount(t, env.db, "forked", 10)
 	assertSessionMessageCount(t, env.db, "forked-i", 2)
 
@@ -2134,7 +2134,7 @@ func TestResyncAllAbortsWithForkAndFailures(t *testing.T) {
 		t.Cleanup(func() { os.Chmod(p, 0o644) })
 	}
 
-	stats := env.engine.ResyncAll(nil)
+	stats := env.engine.ResyncAll(context.Background(), nil)
 
 	// Expect: filesOK=1, Failed=2, Synced=2.
 	// Abort should fire because Failed(2) > filesOK(1).
@@ -2184,7 +2184,7 @@ func TestResyncAllPostReopenAvailability(t *testing.T) {
 	})
 
 	// Resync triggers the full close-rename-reopen cycle.
-	stats := env.engine.ResyncAll(nil)
+	stats := env.engine.ResyncAll(context.Background(), nil)
 	if stats.Synced != 1 {
 		t.Fatalf("resync: synced = %d, want 1", stats.Synced)
 	}
@@ -2234,7 +2234,7 @@ func TestResyncAllPostReopenAvailability(t *testing.T) {
 
 	// Verify a subsequent SyncAll still works (engine state
 	// is consistent with the reopened DB).
-	stats2 := env.engine.SyncAll(nil)
+	stats2 := env.engine.SyncAll(context.Background(), nil)
 	if stats2.Synced != 0 || stats2.Skipped != 1 {
 		t.Errorf(
 			"post-resync SyncAll: synced=%d skipped=%d",
@@ -2258,7 +2258,7 @@ func TestResyncAllConcurrentReads(t *testing.T) {
 		t, "conc-proj", "conc.jsonl", content,
 	)
 
-	env.engine.SyncAll(nil)
+	env.engine.SyncAll(context.Background(), nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -2306,7 +2306,7 @@ func TestResyncAllConcurrentReads(t *testing.T) {
 	<-readersReady
 
 	// Run resync while readers are active.
-	stats := env.engine.ResyncAll(nil)
+	stats := env.engine.ResyncAll(context.Background(), nil)
 	cancel()
 	wg.Wait()
 
@@ -2339,7 +2339,7 @@ func TestResyncAllAbortsOnEmptyDiscovery(t *testing.T) {
 		AddClaudeAssistant(tsEarlyS5, "ok").
 		String()
 	env.writeClaudeSession(t, "proj", "keep.jsonl", content)
-	env.engine.SyncAll(nil)
+	env.engine.SyncAll(context.Background(), nil)
 	assertSessionMessageCount(t, env.db, "keep", 2)
 
 	// Remove all session files to simulate empty discovery.
@@ -2354,7 +2354,7 @@ func TestResyncAllAbortsOnEmptyDiscovery(t *testing.T) {
 		os.Remove(p)
 	}
 
-	stats := env.engine.ResyncAll(nil)
+	stats := env.engine.ResyncAll(context.Background(), nil)
 
 	// Swap must be aborted.
 	hasAbortWarning := false
@@ -2409,13 +2409,13 @@ func TestResyncAllOpenCodeOnly(t *testing.T) {
 	)
 
 	// Initial sync populates the DB with OpenCode sessions.
-	env.engine.SyncAll(nil)
+	env.engine.SyncAll(context.Background(), nil)
 	agentviewID := "opencode:" + sessionID
 	assertSessionMessageCount(t, env.db, agentviewID, 2)
 
 	// ResyncAll must not abort — OpenCode sessions should
 	// survive even though file discovery returns zero.
-	stats := env.engine.ResyncAll(nil)
+	stats := env.engine.ResyncAll(context.Background(), nil)
 
 	for _, w := range stats.Warnings {
 		if strings.Contains(w, "resync aborted") {
@@ -2482,7 +2482,7 @@ func TestResyncAllAbortsMixedSourceEmptyFiles(t *testing.T) {
 	)
 
 	// Initial sync: both sources.
-	env.engine.SyncAll(nil)
+	env.engine.SyncAll(context.Background(), nil)
 	assertSessionMessageCount(t, env.db, "mixed-file", 2)
 	assertSessionMessageCount(
 		t, env.db, "opencode:"+sessionID, 2,
@@ -2501,7 +2501,7 @@ func TestResyncAllAbortsMixedSourceEmptyFiles(t *testing.T) {
 		os.Remove(p)
 	}
 
-	stats := env.engine.ResyncAll(nil)
+	stats := env.engine.ResyncAll(context.Background(), nil)
 
 	// Must abort: file-backed sessions would be lost.
 	hasAbortWarning := false
@@ -2558,7 +2558,7 @@ func TestNewEngineDefensiveCopy(t *testing.T) {
 	dirs[parser.AgentCodex] = []string{"/bogus"}
 
 	// Engine should still find the session via its own copy.
-	stats := engine.SyncAll(nil)
+	stats := engine.SyncAll(context.Background(), nil)
 	if stats.Synced != 1 {
 		t.Fatalf(
 			"Synced = %d, want 1 (engine used mutated map)",
@@ -2592,7 +2592,7 @@ func TestNewEngineDefensiveCopy(t *testing.T) {
 	// Mutate the element inside the original slice.
 	sliceDirs[0] = "/nonexistent"
 
-	stats2 := engine2.SyncAll(nil)
+	stats2 := engine2.SyncAll(context.Background(), nil)
 	if stats2.Synced != 1 {
 		t.Fatalf(
 			"Synced = %d, want 1 (engine used aliased slice)",
@@ -2805,7 +2805,7 @@ func TestPiSessionIntegration(t *testing.T) {
 		Machine: "local",
 	})
 
-	stats := engine.SyncAll(nil)
+	stats := engine.SyncAll(context.Background(), nil)
 	if stats.Synced != 1 {
 		t.Fatalf("expected 1 synced session, got %d (failed=%d)",
 			stats.Synced, stats.Failed)
@@ -2854,7 +2854,7 @@ func TestIncrementalSync_ClaudeAppend(t *testing.T) {
 	path := env.writeClaudeSession(
 		t, "proj", "inc-test.jsonl", initial,
 	)
-	env.engine.SyncAll(nil)
+	env.engine.SyncAll(context.Background(), nil)
 
 	assertSessionMessageCount(t, env.db, "inc-test", 1)
 	assertMessageRoles(t, env.db, "inc-test", "user")
@@ -2944,7 +2944,7 @@ func TestIncrementalSync_CodexAppend(t *testing.T) {
 		t, filepath.Join("2024", "01", "01"),
 		"rollout-20240101-inc-cx.jsonl", initial,
 	)
-	env.engine.SyncAll(nil)
+	env.engine.SyncAll(context.Background(), nil)
 
 	assertSessionMessageCount(
 		t, env.db, "codex:inc-cx", 1,
