@@ -2185,7 +2185,7 @@ func (e *Engine) SyncSingleSession(sessionID string) error {
 	for _, pr := range res.results {
 		if err := e.writeSessionFull(
 			pendingWrite{sess: pr.Session, msgs: pr.Messages},
-		); err != nil {
+		); err != nil && !errors.Is(err, db.ErrSessionExcluded) {
 			return fmt.Errorf("write session %s: %w",
 				pr.Session.ID, err)
 		}
@@ -2241,7 +2241,7 @@ func (e *Engine) syncSingleOpenCode(
 		}
 		if err := e.writeSessionFull(
 			pendingWrite{sess: *sess, msgs: msgs},
-		); err != nil {
+		); err != nil && !errors.Is(err, db.ErrSessionExcluded) {
 			return fmt.Errorf("write session %s: %w",
 				sess.ID, err)
 		}

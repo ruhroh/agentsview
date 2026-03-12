@@ -3125,3 +3125,80 @@ func TestSyncAllOpenCodeExcludedNotCountedAsFailed(
 		)
 	}
 }
+
+// TestSyncSingleSessionExcludedIsNoOp verifies that
+// calling SyncSingleSession on a permanently deleted
+// (excluded) session returns nil, not an error.
+func TestSyncSingleSessionExcludedIsNoOp(t *testing.T) {
+	env := setupTestEnv(t)
+
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsZero, "hello").
+		AddClaudeAssistant(tsZeroS5, "hi").
+		String()
+
+	env.writeClaudeSession(
+		t, "test-proj", "excl-single.jsonl", content,
+	)
+
+	env.engine.SyncAll(context.Background(), nil)
+	assertSessionMessageCount(t, env.db, "excl-single", 2)
+
+	// Permanently delete → marks it excluded.
+	if err := env.db.DeleteSession(
+		"excl-single",
+	); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+
+	// SyncSingleSession should silently skip, not error.
+	if err := env.engine.SyncSingleSession(
+		"excl-single",
+	); err != nil {
+		t.Fatalf(
+			"SyncSingleSession on excluded session "+
+				"returned error: %v", err,
+		)
+	}
+}
+
+// TestSyncSingleSessionOpenCodeExcludedIsNoOp verifies that
+// calling SyncSingleSession on an excluded OpenCode session
+// returns nil.
+func TestSyncSingleSessionOpenCodeExcludedIsNoOp(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj1", "/tmp/proj1")
+	oc.addSession(t, "oc-excl-single", "proj1", 1000, 1000)
+	oc.addMessage(
+		t, "msg1", "oc-excl-single", "user", 1000,
+	)
+	oc.addTextPart(
+		t, "p1", "oc-excl-single", "msg1",
+		"hello", 1000,
+	)
+
+	env.engine.SyncAll(context.Background(), nil)
+
+	sessionID := "opencode:oc-excl-single"
+	assertSessionMessageCount(t, env.db, sessionID, 1)
+
+	if err := env.db.DeleteSession(sessionID); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+
+	// Bump time so parser would normally pick it up.
+	oc.updateSessionTime(t, "oc-excl-single", 2000)
+
+	if err := env.engine.SyncSingleSession(
+		sessionID,
+	); err != nil {
+		t.Fatalf(
+			"SyncSingleSession on excluded OpenCode "+
+				"session returned error: %v", err,
+		)
+	}
+}
