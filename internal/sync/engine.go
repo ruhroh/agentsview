@@ -869,11 +869,14 @@ func (e *Engine) syncAllLocked(
 		)
 	}
 
-	// If cancelled, return partial stats immediately without
-	// running further phases or mutating state.
-	if stats.Aborted {
+	// If cancelled (either collectAndBatch set Aborted, or
+	// context was cancelled after the loop with no file-backed
+	// sessions), return partial stats without running further
+	// phases or mutating state. Don't update lastSync so the
+	// UI/sync-status still reflects the last completed sync.
+	if stats.Aborted || ctx.Err() != nil {
+		stats.Aborted = true
 		e.mu.Lock()
-		e.lastSync = time.Now()
 		e.lastSyncStats = stats
 		e.mu.Unlock()
 		return stats
@@ -1035,13 +1038,14 @@ func (e *Engine) collectAndBatch(
 	var pending []pendingWrite
 
 	for range total {
+		var r syncJob
 		select {
 		case <-ctx.Done():
 			stats.Aborted = true
+			go drainResults(results, total-progress.SessionsDone)
 			goto flush
-		default:
+		case r = <-results:
 		}
-		r := <-results
 
 		if r.err != nil {
 			stats.RecordFailed()
@@ -1114,6 +1118,14 @@ flush:
 		onProgress(progress)
 	}
 	return stats
+}
+
+// drainResults consumes remaining items from the results
+// channel so that worker goroutines can exit and be collected.
+func drainResults(results <-chan syncJob, remaining int) {
+	for range remaining {
+		<-results
+	}
 }
 
 // incrementalUpdate holds the delta produced by an

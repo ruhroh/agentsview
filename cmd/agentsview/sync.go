@@ -97,10 +97,11 @@ func runSync(args []string) {
 		Machine:   "local",
 	})
 
+	ctx := context.Background()
 	if cfg.Full || database.NeedsResync() {
-		runInitialResync(engine)
+		runInitialResync(ctx, engine)
 	} else {
-		runInitialSync(engine)
+		runInitialSync(ctx, engine)
 	}
 
 	fmt.Println()

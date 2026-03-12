@@ -185,6 +185,11 @@ func runServe(args []string) {
 	// Remove stale temp DB from a prior crashed resync.
 	cleanResyncTemp(cfg.DBPath)
 
+	ctx, stop := signal.NotifyContext(
+		context.Background(), os.Interrupt, syscall.SIGTERM,
+	)
+	defer stop()
+
 	engine := sync.NewEngine(database, sync.EngineConfig{
 		AgentDirs:               cfg.AgentDirs,
 		Machine:                 "local",
@@ -192,9 +197,12 @@ func runServe(args []string) {
 	})
 
 	if database.NeedsResync() {
-		runInitialResync(engine)
+		runInitialResync(ctx, engine)
 	} else {
-		runInitialSync(engine)
+		runInitialSync(ctx, engine)
+	}
+	if ctx.Err() != nil {
+		return
 	}
 
 	stopWatcher, unwatchedDirs := startFileWatcher(cfg, engine)
@@ -244,11 +252,6 @@ func runServe(args []string) {
 			cfg.PublicOrigins = updatedOrigins
 		}
 	}
-
-	ctx, stop := signal.NotifyContext(
-		context.Background(), os.Interrupt, syscall.SIGTERM,
-	)
-	defer stop()
 
 	srv := server.New(cfg, database, engine,
 		server.WithVersion(server.VersionInfo{
@@ -472,25 +475,27 @@ func cleanResyncTemp(dbPath string) {
 	}
 }
 
-func runInitialSync(engine *sync.Engine) {
+func runInitialSync(
+	ctx context.Context, engine *sync.Engine,
+) {
 	fmt.Println("Running initial sync...")
 	t := time.Now()
-	ctx := context.Background()
 	stats := engine.SyncAll(ctx, printSyncProgress)
 	printSyncSummary(stats, t)
 }
 
-func runInitialResync(engine *sync.Engine) {
+func runInitialResync(
+	ctx context.Context, engine *sync.Engine,
+) {
 	fmt.Println("Data version changed, running full resync...")
 	t := time.Now()
-	ctx := context.Background()
 	stats := engine.ResyncAll(ctx, printSyncProgress)
 	printSyncSummary(stats, t)
 
-	// If resync was aborted (swap didn't happen), fall back
-	// to a normal incremental sync so the server starts with
-	// current file data rather than a potentially stale DB.
-	if stats.Aborted {
+	// If resync was aborted due to data issues (not
+	// cancellation), fall back to an incremental sync so
+	// the server starts with current data.
+	if stats.Aborted && ctx.Err() == nil {
 		fmt.Println("Resync incomplete, running incremental sync...")
 		t = time.Now()
 		fallback := engine.SyncAll(ctx, printSyncProgress)
