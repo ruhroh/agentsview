@@ -198,44 +198,62 @@ func ParseClaudeSession(
 // startOrdinal) and the latest timestamp. Fork detection is
 // skipped — new entries are processed linearly. Used for
 // incremental re-parsing of append-only session files.
+// ErrDAGDetected is returned by ParseClaudeSessionFrom when
+// appended lines contain uuid fields that require DAG-aware
+// fork detection, which incremental parsing cannot handle.
+var ErrDAGDetected = fmt.Errorf(
+	"incremental parse: DAG uuid detected",
+)
+
 func ParseClaudeSessionFrom(
 	path string,
 	offset int64,
 	startOrdinal int,
-) ([]ParsedMessage, time.Time, error) {
+) ([]ParsedMessage, time.Time, int64, error) {
 	var entries []dagEntry
 	lineIndex := startOrdinal
 
-	err := readJSONLFrom(path, offset, func(line string) {
-		entryType := gjson.Get(line, "type").Str
-		if entryType != "user" &&
-			entryType != "assistant" {
-			return
-		}
-		ts := extractTimestamp(line)
-		entries = append(entries, dagEntry{
-			entryType: entryType,
-			lineIndex: lineIndex,
-			line:      line,
-			timestamp: ts,
-		})
-		lineIndex++
-	})
+	consumed, err := readJSONLFrom(
+		path, offset, func(line string) {
+			entryType := gjson.Get(line, "type").Str
+			if entryType != "user" &&
+				entryType != "assistant" {
+				return
+			}
+			ts := extractTimestamp(line)
+			entries = append(entries, dagEntry{
+				uuid:      gjson.Get(line, "uuid").Str,
+				entryType: entryType,
+				lineIndex: lineIndex,
+				line:      line,
+				timestamp: ts,
+			})
+			lineIndex++
+		},
+	)
 	if err != nil {
-		return nil, time.Time{}, fmt.Errorf(
+		return nil, time.Time{}, 0, fmt.Errorf(
 			"reading claude %s from offset %d: %w",
 			path, offset, err,
 		)
 	}
 
 	if len(entries) == 0 {
-		return nil, time.Time{}, nil
+		return nil, time.Time{}, consumed, nil
+	}
+
+	// If any appended line has a uuid, the file uses DAG
+	// structure and needs full fork detection.
+	for _, e := range entries {
+		if e.uuid != "" {
+			return nil, time.Time{}, 0, ErrDAGDetected
+		}
 	}
 
 	msgs, _, endedAt := extractMessagesFrom(
 		entries, startOrdinal,
 	)
-	return msgs, endedAt, nil
+	return msgs, endedAt, consumed, nil
 }
 
 // extractMessagesFrom is like extractMessages but uses a

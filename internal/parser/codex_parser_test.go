@@ -374,7 +374,7 @@ func TestParseCodexSessionFrom_Incremental(t *testing.T) {
 	require.NoError(t, f.Close())
 
 	// Incremental parse from the offset.
-	newMsgs, endedAt, err := ParseCodexSessionFrom(
+	newMsgs, endedAt, _, err := ParseCodexSessionFrom(
 		path, offset, 1, false,
 	)
 	require.NoError(t, err)
@@ -423,7 +423,7 @@ func TestParseCodexSessionFrom_SkipsSessionMeta(t *testing.T) {
 	f.WriteString(extra)
 	f.Close()
 
-	newMsgs, _, err := ParseCodexSessionFrom(
+	newMsgs, _, _, err := ParseCodexSessionFrom(
 		path, offset, 5, false,
 	)
 	require.NoError(t, err)
@@ -447,7 +447,7 @@ func TestParseCodexSessionFrom_NoNewData(t *testing.T) {
 	offset := info.Size()
 
 	// Parse from end of file — no new data.
-	newMsgs, endedAt, err := ParseCodexSessionFrom(
+	newMsgs, endedAt, _, err := ParseCodexSessionFrom(
 		path, offset, 10, false,
 	)
 	require.NoError(t, err)

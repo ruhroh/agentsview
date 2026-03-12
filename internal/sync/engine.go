@@ -1293,10 +1293,12 @@ func (e *Engine) processClaude(
 // incrementalParseFunc reads new JSONL lines from a file
 // starting at the given byte offset with the given starting
 // ordinal. Returns parsed messages, the latest timestamp
-// (endedAt), and any error.
+// (endedAt), bytes consumed (relative to offset), and any
+// error. The consumed count covers only complete, valid JSON
+// lines so it can be used as a safe resume offset.
 type incrementalParseFunc func(
 	path string, offset int64, startOrdinal int,
-) ([]parser.ParsedMessage, time.Time, error)
+) ([]parser.ParsedMessage, time.Time, int64, error)
 
 // tryIncrementalJSONL attempts an incremental parse of an
 // append-only JSONL file by reading only bytes appended since
@@ -1325,7 +1327,7 @@ func (e *Engine) tryIncrementalJSONL(
 		return processResult{}, false
 	}
 
-	newMsgs, endedAt, err := parseFn(
+	newMsgs, endedAt, consumed, err := parseFn(
 		file.Path, inc.FileSize, maxOrd+1,
 	)
 	if err != nil {
@@ -1342,6 +1344,11 @@ func (e *Engine) tryIncrementalJSONL(
 
 	newUserCount := countUserMsgs(newMsgs)
 
+	// Use the offset through the last valid JSON line, not
+	// info.Size(), so partial lines at EOF are retried on
+	// the next sync.
+	newOffset := inc.FileSize + consumed
+
 	log.Printf(
 		"incremental %s %s: %d new message(s) "+
 			"from offset %d",
@@ -1355,7 +1362,7 @@ func (e *Engine) tryIncrementalJSONL(
 			endedAt:      endedAt,
 			msgCount:     inc.MsgCount + len(newMsgs),
 			userMsgCount: inc.UserMsgCount + newUserCount,
-			fileSize:     currentSize,
+			fileSize:     newOffset,
 			fileMtime:    info.ModTime().UnixNano(),
 		},
 	}, true
@@ -1374,7 +1381,7 @@ func (e *Engine) processCodex(
 	// that have already been synced.
 	codexParseFn := func(
 		path string, offset int64, startOrd int,
-	) ([]parser.ParsedMessage, time.Time, error) {
+	) ([]parser.ParsedMessage, time.Time, int64, error) {
 		return parser.ParseCodexSessionFrom(
 			path, offset, startOrd, false,
 		)

@@ -610,27 +610,29 @@ func ParseCodexSessionFrom(
 	offset int64,
 	startOrdinal int,
 	includeExec bool,
-) ([]ParsedMessage, time.Time, error) {
+) ([]ParsedMessage, time.Time, int64, error) {
 	b := newCodexSessionBuilder(includeExec)
 	b.ordinal = startOrdinal
 
-	err := readJSONLFrom(path, offset, func(line string) {
-		// Skip session_meta — already processed in the
-		// initial full parse.
-		if gjson.Get(line, "type").Str ==
-			codexTypeSessionMeta {
-			return
-		}
-		b.processLine(line)
-	})
+	consumed, err := readJSONLFrom(
+		path, offset, func(line string) {
+			// Skip session_meta — already processed in
+			// the initial full parse.
+			if gjson.Get(line, "type").Str ==
+				codexTypeSessionMeta {
+				return
+			}
+			b.processLine(line)
+		},
+	)
 	if err != nil {
-		return nil, time.Time{}, fmt.Errorf(
+		return nil, time.Time{}, 0, fmt.Errorf(
 			"reading codex %s from offset %d: %w",
 			path, offset, err,
 		)
 	}
 
-	return b.messages, b.endedAt, nil
+	return b.messages, b.endedAt, consumed, nil
 }
 
 func isCodexSystemMessage(content string) bool {

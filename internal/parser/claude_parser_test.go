@@ -236,7 +236,7 @@ func TestParseClaudeSessionFrom_Incremental(t *testing.T) {
 	require.NoError(t, f.Close())
 
 	// Incremental parse from offset.
-	newMsgs, endedAt, err := ParseClaudeSessionFrom(
+	newMsgs, endedAt, _, err := ParseClaudeSessionFrom(
 		path, offset, 2,
 	)
 	require.NoError(t, err)
@@ -284,7 +284,7 @@ func TestParseClaudeSessionFrom_SkipsNonMessages(
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	newMsgs, _, err := ParseClaudeSessionFrom(
+	newMsgs, _, _, err := ParseClaudeSessionFrom(
 		path, offset, 1,
 	)
 	require.NoError(t, err)
@@ -307,12 +307,87 @@ func TestParseClaudeSessionFrom_NoNewData(t *testing.T) {
 	require.NoError(t, err)
 
 	// Parse from EOF — should return empty.
-	newMsgs, endedAt, err := ParseClaudeSessionFrom(
+	newMsgs, endedAt, _, err := ParseClaudeSessionFrom(
 		path, info.Size(), 1,
 	)
 	require.NoError(t, err)
 	assert.Empty(t, newMsgs)
 	assert.True(t, endedAt.IsZero())
+}
+
+func TestParseClaudeSessionFrom_PartialLineAtEOF(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	initial := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("hello", tsEarly),
+	)
+	path := createTestFile(
+		t, "inc-partial.jsonl", initial,
+	)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	offset := info.Size()
+
+	// Append a complete line + a partial (truncated) line.
+	complete := testjsonl.ClaudeAssistantJSON(
+		"complete", tsEarlyS5,
+	) + "\n"
+	partial := `{"type":"user","timestamp":"` + tsLate
+	f, err := os.OpenFile(
+		path, os.O_APPEND|os.O_WRONLY, 0o644,
+	)
+	require.NoError(t, err)
+	_, err = f.WriteString(complete + partial)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	newMsgs, _, consumed, err := ParseClaudeSessionFrom(
+		path, offset, 1,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 1, len(newMsgs))
+	assert.Equal(t, RoleAssistant, newMsgs[0].Role)
+
+	// consumed should cover only the complete line, not
+	// the partial one.
+	assert.Equal(t, int64(len(complete)), consumed)
+}
+
+func TestParseClaudeSessionFrom_DAGDetected(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	initial := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("hello", tsEarly),
+	)
+	path := createTestFile(
+		t, "inc-dag.jsonl", initial,
+	)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	offset := info.Size()
+
+	// Append a line with a uuid field (DAG structure).
+	dagLine := `{"type":"user","uuid":"abc-123",` +
+		`"timestamp":"` + tsEarlyS5 +
+		`","message":{"content":"fork"}}` + "\n"
+	f, err := os.OpenFile(
+		path, os.O_APPEND|os.O_WRONLY, 0o644,
+	)
+	require.NoError(t, err)
+	_, err = f.WriteString(dagLine)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	_, _, _, err = ParseClaudeSessionFrom(
+		path, offset, 1,
+	)
+	assert.ErrorIs(t, err, ErrDAGDetected)
 }
 
 func loadFixture(t *testing.T, name string) string {
