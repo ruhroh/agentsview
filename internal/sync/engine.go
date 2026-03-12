@@ -1035,7 +1035,7 @@ func (e *Engine) collectAndBatch(
 			}
 			continue
 		}
-		if len(r.results) == 0 {
+		if len(r.results) == 0 && r.incremental == nil {
 			e.cacheSkip(r.path, r.mtime)
 			progress.SessionsDone++
 			if onProgress != nil {
@@ -1046,12 +1046,19 @@ func (e *Engine) collectAndBatch(
 		e.clearSkip(r.path)
 		stats.filesOK++
 
-		for _, pr := range r.results {
-			pending = append(pending, pendingWrite{
-				sess:       pr.Session,
-				msgs:       pr.Messages,
-				appendOnly: r.appendOnly,
-			})
+		if r.incremental != nil {
+			e.writeIncremental(r.incremental)
+			stats.RecordSynced(1)
+			progress.MessagesIndexed += len(
+				r.incremental.msgs,
+			)
+		} else {
+			for _, pr := range r.results {
+				pending = append(pending, pendingWrite{
+					sess: pr.Session,
+					msgs: pr.Messages,
+				})
+			}
 		}
 
 		if len(pending) >= batchSize {
@@ -1080,12 +1087,25 @@ func (e *Engine) collectAndBatch(
 	return stats
 }
 
+// incrementalUpdate holds the delta produced by an
+// incremental JSONL parse, used to partially update the
+// session row without overwriting unrelated columns.
+type incrementalUpdate struct {
+	sessionID    string
+	msgs         []parser.ParsedMessage
+	endedAt      time.Time
+	msgCount     int // total (old + new)
+	userMsgCount int // total (old + new)
+	fileSize     int64
+	fileMtime    int64
+}
+
 type processResult struct {
-	results    []parser.ParseResult
-	skip       bool
-	mtime      int64
-	err        error
-	appendOnly bool // messages are new-only; append to DB
+	results     []parser.ParseResult
+	skip        bool
+	mtime       int64
+	err         error
+	incremental *incrementalUpdate
 }
 
 func (e *Engine) processFile(
@@ -1281,7 +1301,9 @@ type incrementalParseFunc func(
 // tryIncrementalJSONL attempts an incremental parse of an
 // append-only JSONL file by reading only bytes appended since
 // the last sync. Returns (result, true) on success, or
-// (zero, false) to fall through to a full parse.
+// (zero, false) to fall through to a full parse. Falls back
+// to full parse when the file maps to multiple DB sessions
+// (e.g. Claude DAG forks).
 func (e *Engine) tryIncrementalJSONL(
 	file parser.DiscoveredFile,
 	info os.FileInfo,
@@ -1318,30 +1340,7 @@ func (e *Engine) tryIncrementalJSONL(
 		return processResult{skip: true}, true
 	}
 
-	var startedAt time.Time
-	if inc.StartedAt != "" {
-		startedAt, _ = time.Parse(
-			time.RFC3339Nano, inc.StartedAt,
-		)
-	}
-
 	newUserCount := countUserMsgs(newMsgs)
-	sess := parser.ParsedSession{
-		ID:               inc.ID,
-		Project:          inc.Project,
-		Machine:          e.machine,
-		Agent:            agent,
-		FirstMessage:     inc.FirstMessage,
-		StartedAt:        startedAt,
-		EndedAt:          endedAt,
-		MessageCount:     inc.MsgCount + len(newMsgs),
-		UserMessageCount: inc.UserMsgCount + newUserCount,
-		File: parser.FileInfo{
-			Path:  file.Path,
-			Size:  currentSize,
-			Mtime: info.ModTime().UnixNano(),
-		},
-	}
 
 	log.Printf(
 		"incremental %s %s: %d new message(s) "+
@@ -1350,10 +1349,15 @@ func (e *Engine) tryIncrementalJSONL(
 	)
 
 	return processResult{
-		results: []parser.ParseResult{
-			{Session: sess, Messages: newMsgs},
+		incremental: &incrementalUpdate{
+			sessionID:    inc.ID,
+			msgs:         newMsgs,
+			endedAt:      endedAt,
+			msgCount:     inc.MsgCount + len(newMsgs),
+			userMsgCount: inc.UserMsgCount + newUserCount,
+			fileSize:     currentSize,
+			fileMtime:    info.ModTime().UnixNano(),
 		},
-		appendOnly: true,
 	}, true
 }
 
@@ -1712,34 +1716,23 @@ func (e *Engine) processIflow(
 }
 
 type pendingWrite struct {
-	sess       parser.ParsedSession
-	msgs       []parser.ParsedMessage
-	appendOnly bool // msgs are new-only; session counts are pre-set
+	sess parser.ParsedSession
+	msgs []parser.ParsedMessage
 }
 
 func (e *Engine) writeBatch(batch []pendingWrite) {
 	for _, pw := range batch {
 		msgs := toDBMessages(pw, e.blockedResultCategories)
 		s := toDBSession(pw)
-		if pw.appendOnly {
-			// For incremental appends, session counts are
-			// pre-calculated (old + new). Adjust for any
-			// messages removed by the blocked-category filter.
-			newTotal, newUser := postFilterCounts(msgs)
-			filtered := len(pw.msgs) - newTotal
-			s.MessageCount -= filtered
-			userFiltered := countUserMsgs(pw.msgs) - newUser
-			s.UserMessageCount -= userFiltered
-		} else {
-			s.MessageCount, s.UserMessageCount =
-				postFilterCounts(msgs)
-		}
+		s.MessageCount, s.UserMessageCount =
+			postFilterCounts(msgs)
 		if err := e.db.UpsertSession(s); err != nil {
 			if errors.Is(err, db.ErrSessionExcluded) {
-				// Cache as skipped so excluded files are not
-				// re-parsed on subsequent syncs.
 				if pw.sess.File.Path != "" {
-					e.cacheSkip(pw.sess.File.Path, pw.sess.File.Mtime)
+					e.cacheSkip(
+						pw.sess.File.Path,
+						pw.sess.File.Mtime,
+					)
 				}
 				continue
 			}
@@ -1748,6 +1741,45 @@ func (e *Engine) writeBatch(batch []pendingWrite) {
 		}
 		e.writeMessages(pw.sess.ID, msgs)
 	}
+}
+
+// writeIncremental appends new messages and partially updates
+// session metadata without overwriting columns that are not
+// recomputed during incremental parsing (e.g. file_hash,
+// parent_session_id, relationship_type).
+func (e *Engine) writeIncremental(inc *incrementalUpdate) {
+	dbMsgs := toDBMessages(
+		pendingWrite{msgs: inc.msgs},
+		e.blockedResultCategories,
+	)
+
+	// Adjust counts for blocked-category filtering.
+	newTotal, newUser := postFilterCounts(dbMsgs)
+	filtered := len(inc.msgs) - newTotal
+	msgCount := inc.msgCount - filtered
+	userFiltered := countUserMsgs(inc.msgs) - newUser
+	userMsgCount := inc.userMsgCount - userFiltered
+
+	var endedAt *string
+	if !inc.endedAt.IsZero() {
+		s := inc.endedAt.Format(time.RFC3339Nano)
+		endedAt = &s
+	}
+
+	err := e.db.UpdateSessionIncremental(
+		inc.sessionID, endedAt,
+		msgCount, userMsgCount,
+		inc.fileSize, inc.fileMtime,
+	)
+	if err != nil {
+		log.Printf(
+			"incremental update %s: %v",
+			inc.sessionID, err,
+		)
+		return
+	}
+
+	e.writeMessages(inc.sessionID, dbMsgs)
 }
 
 // writeMessages uses an incremental append when possible.

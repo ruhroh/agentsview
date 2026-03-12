@@ -591,45 +591,78 @@ func (db *DB) GetSessionMessageCount(
 // re-parsing of an append-only session file.
 type IncrementalInfo struct {
 	ID           string
-	Project      string
-	FirstMessage string
-	StartedAt    string
 	FileSize     int64
 	MsgCount     int
 	UserMsgCount int
 }
 
 // GetSessionForIncremental returns session state needed for
-// incremental parsing, looked up by file_path.
+// incremental parsing, looked up by file_path. Returns false
+// when the path is unknown or maps to multiple sessions (e.g.
+// Claude DAG forks), since incremental parsing cannot update
+// multiple sessions from a single append.
 func (db *DB) GetSessionForIncremental(
 	path string,
 ) (*IncrementalInfo, bool) {
-	var info IncrementalInfo
-	var fm, sa sql.NullString
-	var fs sql.NullInt64
+	// Bail out if the file maps to more than one session
+	// (Claude fork/subagent splits).
+	var count int
 	err := db.getReader().QueryRow(
-		`SELECT id, project, first_message, started_at,
-			file_size, message_count, user_message_count
-		 FROM sessions WHERE file_path = ?
-		 ORDER BY file_mtime DESC LIMIT 1`,
-		path,
-	).Scan(
-		&info.ID, &info.Project, &fm, &sa,
-		&fs, &info.MsgCount, &info.UserMsgCount,
-	)
-	if err != nil {
+		`SELECT COUNT(*) FROM sessions
+		 WHERE file_path = ?`, path,
+	).Scan(&count)
+	if err != nil || count != 1 {
 		return nil, false
 	}
-	if fm.Valid {
-		info.FirstMessage = fm.String
-	}
-	if sa.Valid {
-		info.StartedAt = sa.String
+
+	var info IncrementalInfo
+	var fs sql.NullInt64
+	err = db.getReader().QueryRow(
+		`SELECT id, file_size, message_count,
+			user_message_count
+		 FROM sessions WHERE file_path = ?`,
+		path,
+	).Scan(&info.ID, &fs, &info.MsgCount, &info.UserMsgCount)
+	if err != nil {
+		return nil, false
 	}
 	if fs.Valid {
 		info.FileSize = fs.Int64
 	}
 	return &info, true
+}
+
+// UpdateSessionIncremental updates only the fields that change
+// during an incremental append: ended_at, message_count,
+// user_message_count, file_size, and file_mtime. All other
+// columns (project, parent_session_id, file_hash, etc.) are
+// preserved.
+func (db *DB) UpdateSessionIncremental(
+	id string,
+	endedAt *string,
+	msgCount, userMsgCount int,
+	fileSize, fileMtime int64,
+) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	_, err := db.getWriter().Exec(`
+		UPDATE sessions SET
+			ended_at = COALESCE(?, ended_at),
+			message_count = ?,
+			user_message_count = ?,
+			file_size = ?,
+			file_mtime = ?
+		WHERE id = ?`,
+		endedAt, msgCount, userMsgCount,
+		fileSize, fileMtime, id,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"incremental update session %s: %w", id, err,
+		)
+	}
+	return nil
 }
 
 // GetFileInfoByPath returns file_size and file_mtime for a
