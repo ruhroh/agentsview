@@ -104,14 +104,7 @@ fn spawn_sidecar(app: &App) -> Result<(CommandRx, CommandChild), DynError> {
     }
 
     Ok(command
-        .args([
-            "serve",
-            "-no-browser",
-            "-host",
-            HOST,
-            "-port",
-            port_arg.as_str(),
-        ])
+        .args(["serve", "-host", HOST, "-port", port_arg.as_str()])
         .spawn()?)
 }
 
