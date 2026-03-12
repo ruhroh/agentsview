@@ -151,10 +151,10 @@ fn is_allowed_navigation_url(url: &Url, backend_port: Option<u16>) -> bool {
     if url.scheme() == "tauri" && url.host_str() == Some("localhost") {
         return true;
     }
-    // Windows (WebView2): https://tauri.localhost (default origin).
-    // Restrict to https-only with no explicit port to avoid accepting
-    // spoofable http origins or unexpected ports.
-    if url.scheme() == "https"
+    // Windows (WebView2): http://tauri.localhost or https://tauri.localhost.
+    // WebView2 uses http by default for the custom localhost origin.
+    // Reject explicit ports to prevent spoofing via other local services.
+    if matches!(url.scheme(), "http" | "https")
         && url.host_str() == Some("tauri.localhost")
         && url.port().is_none()
     {
@@ -926,16 +926,16 @@ mod tests {
         assert!(is_allowed_navigation_url(&tauri_url, None));
         assert!(is_allowed_navigation_url(&tauri_url, Some(18080)));
 
-        // Windows (WebView2): https://tauri.localhost (default origin)
-        let win_https =
-            Url::parse("https://tauri.localhost/index.html").expect("valid windows tauri url");
-        assert!(is_allowed_navigation_url(&win_https, None));
-        assert!(is_allowed_navigation_url(&win_https, Some(18080)));
-
-        // Reject http://tauri.localhost (not the default WebView2 scheme)
+        // Windows (WebView2): http://tauri.localhost (default origin)
         let win_http =
-            Url::parse("http://tauri.localhost/index.html").expect("valid http tauri url");
-        assert!(!is_allowed_navigation_url(&win_http, None));
+            Url::parse("http://tauri.localhost/index.html").expect("valid windows tauri url");
+        assert!(is_allowed_navigation_url(&win_http, None));
+        assert!(is_allowed_navigation_url(&win_http, Some(18080)));
+
+        // Windows: https://tauri.localhost also allowed
+        let win_https =
+            Url::parse("https://tauri.localhost/index.html").expect("valid windows https url");
+        assert!(is_allowed_navigation_url(&win_https, None));
 
         // Reject tauri.localhost with an explicit port
         let win_port =
