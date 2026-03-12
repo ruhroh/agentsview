@@ -2,7 +2,11 @@ package parser
 
 import (
 	"bufio"
+	"fmt"
 	"io"
+	"os"
+
+	"github.com/tidwall/gjson"
 )
 
 // lineReader reads JSONL files line by line, skipping lines that
@@ -87,4 +91,34 @@ func (lr *lineReader) readLine() (string, error) {
 	}
 
 	return string(lr.buf), nil
+}
+
+// readJSONLFrom opens a JSONL file, seeks to offset, and
+// calls fn for each valid JSON line. Returns any I/O error.
+func readJSONLFrom(
+	path string, offset int64, fn func(line string),
+) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", path, err)
+	}
+	defer f.Close()
+
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		return fmt.Errorf(
+			"seek %s to %d: %w", path, offset, err,
+		)
+	}
+
+	lr := newLineReader(f, maxLineSize)
+	for {
+		line, ok := lr.next()
+		if !ok {
+			break
+		}
+		if gjson.Valid(line) {
+			fn(line)
+		}
+	}
+	return lr.Err()
 }

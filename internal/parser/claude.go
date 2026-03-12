@@ -4,7 +4,6 @@ package parser
 
 import (
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -204,36 +203,15 @@ func ParseClaudeSessionFrom(
 	offset int64,
 	startOrdinal int,
 ) ([]ParsedMessage, time.Time, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, time.Time{},
-			fmt.Errorf("open %s: %w", path, err)
-	}
-	defer f.Close()
-
-	if _, err := f.Seek(offset, io.SeekStart); err != nil {
-		return nil, time.Time{},
-			fmt.Errorf("seek %s to %d: %w", path, offset, err)
-	}
-
-	lr := newLineReader(f, maxLineSize)
 	var entries []dagEntry
 	lineIndex := startOrdinal
 
-	for {
-		line, ok := lr.next()
-		if !ok {
-			break
-		}
-		if !gjson.Valid(line) {
-			continue
-		}
-
+	err := readJSONLFrom(path, offset, func(line string) {
 		entryType := gjson.Get(line, "type").Str
-		if entryType != "user" && entryType != "assistant" {
-			continue
+		if entryType != "user" &&
+			entryType != "assistant" {
+			return
 		}
-
 		ts := extractTimestamp(line)
 		entries = append(entries, dagEntry{
 			entryType: entryType,
@@ -242,9 +220,8 @@ func ParseClaudeSessionFrom(
 			timestamp: ts,
 		})
 		lineIndex++
-	}
-
-	if err := lr.Err(); err != nil {
+	})
+	if err != nil {
 		return nil, time.Time{}, fmt.Errorf(
 			"reading claude %s from offset %d: %w",
 			path, offset, err,
