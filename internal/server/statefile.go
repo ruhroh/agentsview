@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -84,14 +83,7 @@ func FindRunningServer(dataDir string) *StateFile {
 		}
 
 		// Check if the process is still running.
-		proc, err := os.FindProcess(sf.PID)
-		if err != nil {
-			os.Remove(path)
-			continue
-		}
-		// Signal 0 checks process existence without
-		// delivering a signal.
-		if err := proc.Signal(syscall.Signal(0)); err != nil {
+		if !processAlive(sf.PID) {
 			os.Remove(path)
 			continue
 		}
