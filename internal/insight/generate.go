@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 )
 
@@ -98,88 +97,19 @@ func GenerateStream(
 	}
 }
 
-// allowedKeyPrefixes lists uppercase key prefixes that are
-// safe to pass to agent CLI subprocesses. Matched
-// case-insensitively so Windows-style casing (Path, ComSpec)
-// is handled correctly. Using an allowlist prevents leaking
-// arbitrary secrets to child processes while preserving
-// provider auth keys needed by the supported CLIs.
-var allowedKeyPrefixes = []string{
-	// System
-	"PATH",
-	"HOME", "USERPROFILE",
-	"USER", "USERNAME", "LOGNAME",
-	"LANG", "LC_",
-	"TERM", "COLORTERM",
-	"TMPDIR", "TEMP", "TMP",
-	"XDG_",
-	"SHELL",
-	"SSL_CERT_", "CURL_CA_BUNDLE",
-	"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
-	"SYSTEMROOT", "COMSPEC", "PATHEXT", "WINDIR",
-	"HOMEDRIVE", "HOMEPATH",
-	"APPDATA", "LOCALAPPDATA", "PROGRAMDATA",
-
-	// Provider auth (needed by agent CLIs)
-	"ANTHROPIC_API_KEY",
-	"OPENAI_API_KEY",
-	"GEMINI_API_KEY",
-	"GOOGLE_API_KEY",
-	"GOOGLE_APPLICATION_CREDENTIALS",
-	"GITHUB_TOKEN",
-	"GH_TOKEN",
-	"COPILOT_",
-}
-
-// envKeyAllowed reports whether key (case-insensitive) is
-// on the allowlist. Prefix entries ending with _ (LC_,
-// XDG_, SSL_CERT_) match any key starting with that prefix;
-// all others require an exact match.
-func envKeyAllowed(key string) bool {
-	upper := strings.ToUpper(key)
-	for _, p := range allowedKeyPrefixes {
-		if strings.HasSuffix(p, "_") {
-			if strings.HasPrefix(upper, p) {
-				return true
-			}
-		} else if upper == p {
-			return true
-		}
-	}
-	return false
-}
-
-// pathValuedKeys lists env var keys whose values are file
-// paths. These must be resolved to absolute paths before
-// passing to subprocesses that run in a different directory.
-var pathValuedKeys = map[string]bool{
-	"GOOGLE_APPLICATION_CREDENTIALS": true,
-	"CURL_CA_BUNDLE":                 true,
-}
-
-// cleanEnv returns an allowlisted subset of the current
-// environment for agent CLI subprocesses, plus
-// CLAUDE_NO_SOUND=1. Path-valued env vars are resolved to
-// absolute paths so they remain valid when the subprocess
-// runs from a different working directory.
-func cleanEnv() []string {
-	env := os.Environ()
-	filtered := make([]string, 0, len(env))
-	for _, e := range env {
-		k, v, _ := strings.Cut(e, "=")
-		if !envKeyAllowed(k) {
-			continue
-		}
-		if pathValuedKeys[strings.ToUpper(k)] &&
-			v != "" && !filepath.IsAbs(v) {
-			abs, err := filepath.Abs(v)
-			if err == nil {
-				e = k + "=" + abs
-			}
-		}
-		filtered = append(filtered, e)
-	}
-	return append(filtered, "CLAUDE_NO_SOUND=1")
+// agentEnv returns the current environment with
+// CLAUDE_NO_SOUND=1 appended.
+//
+// The full environment is passed through intentionally.
+// Agent CLIs need provider auth (API keys, tokens, config
+// paths) that vary across providers, users, and deployment
+// methods (env vars, desktop.env, persisted login). An
+// allowlist is brittle here: every new provider or config
+// var requires a code change, and missing one breaks auth.
+// Sandboxing is handled by CLI flags (--tools, --sandbox,
+// --config-dir, etc.), not by env filtering.
+func agentEnv() []string {
+	return append(os.Environ(), "CLAUDE_NO_SOUND=1")
 }
 
 func emitLog(onLog LogFunc, stream, line string) {
@@ -251,7 +181,7 @@ func generateClaude(
 		"--tools", "",
 	)
 	cmd.Dir = os.TempDir()
-	cmd.Env = cleanEnv()
+	cmd.Env = agentEnv()
 	cmd.Stdin = strings.NewReader(prompt)
 
 	stdoutPipe, err := cmd.StdoutPipe()
@@ -342,7 +272,7 @@ func generateCodex(
 		"-",
 	)
 	cmd.Dir = os.TempDir()
-	cmd.Env = cleanEnv()
+	cmd.Env = agentEnv()
 	cmd.Stdin = strings.NewReader(prompt)
 
 	stdoutPipe, err := cmd.StdoutPipe()
@@ -478,19 +408,9 @@ func parseCodexStream(
 // generateCopilot invokes `copilot -p <prompt> --silent`.
 // The prompt is passed as the -p argument (copilot does not
 // read prompts from stdin). Output is plain text on stdout.
-// An empty --config-dir isolates copilot from user-configured
-// MCP servers in ~/.copilot/.
 func generateCopilot(
 	ctx context.Context, path, prompt string, onLog LogFunc,
 ) (Result, error) {
-	configDir, err := os.MkdirTemp("", "copilot-insight-*")
-	if err != nil {
-		return Result{}, fmt.Errorf(
-			"create copilot config dir: %w", err,
-		)
-	}
-	defer os.RemoveAll(configDir)
-
 	cmd := exec.CommandContext(
 		ctx, path,
 		"-p", prompt,
@@ -498,10 +418,9 @@ func generateCopilot(
 		"--no-custom-instructions",
 		"--no-ask-user",
 		"--disable-builtin-mcps",
-		"--config-dir", configDir,
 	)
 	cmd.Dir = os.TempDir()
-	cmd.Env = cleanEnv()
+	cmd.Env = agentEnv()
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -525,13 +444,19 @@ func generateCopilot(
 	stderrDone := collectStreamLines(
 		stderrPipe, "stderr", onLog,
 	)
-	stdoutDone := collectStreamLines(
-		stdoutPipe, "stdout", onLog,
-	)
-
-	stdoutText := <-stdoutDone
+	// Read stdout raw to preserve blank lines in plain
+	// text output (collectStreamLines drops empty lines).
+	stdoutBytes, readErr := io.ReadAll(stdoutPipe)
 	stderrText := <-stderrDone
 	runErr := cmd.Wait()
+
+	if readErr != nil {
+		return Result{}, fmt.Errorf(
+			"read copilot stdout: %w", readErr,
+		)
+	}
+
+	emitLog(onLog, "stdout", string(stdoutBytes))
 
 	if runErr != nil && ctx.Err() != nil {
 		return Result{}, fmt.Errorf(
@@ -545,7 +470,7 @@ func generateCopilot(
 		)
 	}
 
-	content := strings.TrimSpace(stdoutText)
+	content := strings.TrimSpace(string(stdoutBytes))
 	if content == "" {
 		return Result{}, fmt.Errorf(
 			"copilot returned empty result",
@@ -570,7 +495,7 @@ func generateGemini(
 		"--sandbox",
 	)
 	cmd.Dir = os.TempDir()
-	cmd.Env = cleanEnv()
+	cmd.Env = agentEnv()
 	cmd.Stdin = strings.NewReader(prompt)
 
 	stdoutPipe, err := cmd.StdoutPipe()

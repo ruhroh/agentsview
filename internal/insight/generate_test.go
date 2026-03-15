@@ -174,144 +174,28 @@ func TestCollectStreamLines_LargeLine(t *testing.T) {
 	}
 }
 
-func TestCleanEnv(t *testing.T) {
+func TestAgentEnv(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-secret")
-	t.Setenv("OPENAI_API_KEY", "sk-openai")
-	t.Setenv("GEMINI_API_KEY", "gemini-key")
-	t.Setenv("GOOGLE_API_KEY", "google-key")
-	t.Setenv("GITHUB_TOKEN", "ghp_token")
-	t.Setenv("GH_TOKEN", "gho_token")
-	t.Setenv("COPILOT_AUTH", "copilot-val")
-	t.Setenv("CLAUDECODE", "1")
-	t.Setenv("HOME", "/home/test")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "s3cret")
-	t.Setenv("PATH", "/usr/bin")
-	t.Setenv("LANG", "en_US.UTF-8")
-	t.Setenv("UNKNOWN_VAR", "should-be-dropped")
+	t.Setenv("CUSTOM_VAR", "custom-val")
 
-	env := cleanEnv()
-
-	// Normalize keys to uppercase for cross-platform assertions
-	// (Windows may return Path instead of PATH).
+	env := agentEnv()
 	envMap := make(map[string]string, len(env))
 	for _, e := range env {
 		k, v, _ := strings.Cut(e, "=")
 		envMap[strings.ToUpper(k)] = v
 	}
 
-	// Unrelated secrets and unknown vars must not pass through.
-	for _, blocked := range []string{
-		"CLAUDECODE",
-		"AWS_SECRET_ACCESS_KEY", "UNKNOWN_VAR",
-	} {
-		if _, ok := envMap[blocked]; ok {
-			t.Errorf("%s should not be in env", blocked)
-		}
+	// Full env is passed through — no filtering.
+	if envMap["ANTHROPIC_API_KEY"] != "sk-secret" {
+		t.Error("ANTHROPIC_API_KEY should be preserved")
 	}
-
-	// System vars and provider auth keys must pass through.
-	for _, allowed := range []string{
-		"HOME", "PATH", "LANG",
-		"ANTHROPIC_API_KEY", "OPENAI_API_KEY",
-		"GEMINI_API_KEY", "GOOGLE_API_KEY",
-		"GITHUB_TOKEN", "GH_TOKEN", "COPILOT_AUTH",
-	} {
-		if _, ok := envMap[allowed]; !ok {
-			t.Errorf("%s should be preserved", allowed)
-		}
+	if envMap["CUSTOM_VAR"] != "custom-val" {
+		t.Error("CUSTOM_VAR should be preserved")
 	}
-
 	if v, ok := envMap["CLAUDE_NO_SOUND"]; !ok || v != "1" {
 		t.Errorf(
 			"CLAUDE_NO_SOUND should be 1, got %q", v,
 		)
-	}
-}
-
-func TestCleanEnv_NormalizesRelativePaths(t *testing.T) {
-	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "creds/svc.json")
-	t.Setenv("CURL_CA_BUNDLE", "certs/ca.pem")
-
-	env := cleanEnv()
-	envMap := make(map[string]string, len(env))
-	for _, e := range env {
-		k, v, _ := strings.Cut(e, "=")
-		envMap[strings.ToUpper(k)] = v
-	}
-
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	for _, key := range []string{
-		"GOOGLE_APPLICATION_CREDENTIALS",
-		"CURL_CA_BUNDLE",
-	} {
-		v, ok := envMap[key]
-		if !ok {
-			t.Fatalf("%s missing from env", key)
-		}
-		if !filepath.IsAbs(v) {
-			t.Errorf(
-				"%s = %q, want absolute path", key, v,
-			)
-		}
-		if !strings.HasPrefix(v, cwd) {
-			t.Errorf(
-				"%s = %q, want prefix %q",
-				key, v, cwd,
-			)
-		}
-	}
-}
-
-func TestEnvKeyAllowed(t *testing.T) {
-	tests := []struct {
-		key  string
-		want bool
-	}{
-		{"PATH", true},
-		{"Path", true}, // Windows-style
-		{"path", true}, // lowercase
-		{"HOME", true},
-		{"Home", true},
-		{"COMSPEC", true},
-		{"ComSpec", true}, // Windows-style
-		{"LC_ALL", true},  // prefix match
-		{"XDG_CONFIG_HOME", true},
-		{"SSL_CERT_FILE", true},
-		{"HTTP_PROXY", true},
-		{"APPDATA", true},
-		{"AppData", true},
-		{"LOCALAPPDATA", true},
-		{"PROGRAMDATA", true},
-		{"PATHEXT", true},
-		{"PathExt", true},
-		{"WINDIR", true},
-		{"HOMEDRIVE", true},
-		{"HOMEPATH", true},
-		{"ANTHROPIC_API_KEY", true},
-		{"OPENAI_API_KEY", true},
-		{"GEMINI_API_KEY", true},
-		{"GOOGLE_API_KEY", true},
-		{"GOOGLE_APPLICATION_CREDENTIALS", true},
-		{"GITHUB_TOKEN", true},
-		{"GH_TOKEN", true},
-		{"COPILOT_TOKEN", true}, // prefix match
-		{"AWS_SECRET_ACCESS_KEY", false},
-		{"DATABASE_URL", false},
-		{"", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.key, func(t *testing.T) {
-			if got := envKeyAllowed(tt.key); got != tt.want {
-				t.Errorf(
-					"envKeyAllowed(%q) = %v, want %v",
-					tt.key, got, tt.want,
-				)
-			}
-		})
 	}
 }
 
@@ -510,20 +394,21 @@ func TestGenerateCopilot_CLIFlags(t *testing.T) {
 		strings.TrimSpace(string(argsData)), "\n",
 	)
 
-	// --config-dir value is a dynamic temp path, so verify
-	// args as a joined string for the fixed flags.
-	joined := strings.Join(args, " ")
-	for _, want := range []string{
-		"-p test prompt",
+	wantArgs := []string{
+		"-p", "test prompt",
 		"--silent",
 		"--no-custom-instructions",
 		"--no-ask-user",
 		"--disable-builtin-mcps",
-		"--config-dir",
-	} {
-		if !strings.Contains(joined, want) {
+	}
+	if len(args) != len(wantArgs) {
+		t.Fatalf("args = %v, want %v", args, wantArgs)
+	}
+	for i, want := range wantArgs {
+		if args[i] != want {
 			t.Errorf(
-				"args %q missing %q", joined, want,
+				"arg[%d] = %q, want %q",
+				i, args[i], want,
 			)
 		}
 	}
@@ -546,6 +431,29 @@ func TestGenerateCopilot_EmptyResult(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "empty result") {
 		t.Errorf("error = %q, want empty result", err)
+	}
+}
+
+func TestGenerateCopilot_PreservesBlankLines(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script test not supported on windows")
+	}
+
+	multiParagraph := "# Summary\n\nParagraph one.\n\nParagraph two.\n"
+	bin, _ := createMockBinary(
+		t, multiParagraph, 0, false, "copilot",
+	)
+
+	result, err := generateCopilot(
+		context.Background(), bin, "test", nil,
+	)
+	if err != nil {
+		t.Fatalf("generateCopilot: %v", err)
+	}
+	if !strings.Contains(result.Content, "\n\n") {
+		t.Errorf(
+			"blank lines lost: %q", result.Content,
+		)
 	}
 }
 
