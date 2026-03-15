@@ -2,6 +2,8 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -109,6 +111,100 @@ func TestFindRunningServer_IgnoresNonStateFiles(t *testing.T) {
 	result := FindRunningServer(dir)
 	if result != nil {
 		t.Errorf("expected nil, got %+v", result)
+	}
+}
+
+func TestFindRunningServer_LiveProcess(t *testing.T) {
+	dir := t.TempDir()
+
+	// Start a real TCP listener so the port probe succeeds.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	port := ln.Addr().(*net.TCPAddr).Port
+
+	// Write a state file for our own PID and the listener port.
+	sf := StateFile{
+		PID:       os.Getpid(),
+		Port:      port,
+		Host:      "127.0.0.1",
+		Version:   "1.0.0",
+		StartedAt: "2025-01-01T00:00:00Z",
+	}
+	data, _ := json.Marshal(sf)
+	path := filepath.Join(dir, fmt.Sprintf("server.%d.json", port))
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write state file: %v", err)
+	}
+
+	result := FindRunningServer(dir)
+	if result == nil {
+		t.Fatal("expected running server, got nil")
+	}
+	if result.Port != port {
+		t.Errorf("port = %d, want %d", result.Port, port)
+	}
+	if result.PID != os.Getpid() {
+		t.Errorf("pid = %d, want %d", result.PID, os.Getpid())
+	}
+}
+
+func TestFindRunningServer_BindAll(t *testing.T) {
+	dir := t.TempDir()
+
+	// Listener on 0.0.0.0 — probe should normalize to 127.0.0.1.
+	ln, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	port := ln.Addr().(*net.TCPAddr).Port
+
+	sf := StateFile{
+		PID:       os.Getpid(),
+		Port:      port,
+		Host:      "0.0.0.0",
+		Version:   "1.0.0",
+		StartedAt: "2025-01-01T00:00:00Z",
+	}
+	data, _ := json.Marshal(sf)
+	path := filepath.Join(dir, fmt.Sprintf("server.%d.json", port))
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write state file: %v", err)
+	}
+
+	result := FindRunningServer(dir)
+	if result == nil {
+		t.Fatal("expected running server for 0.0.0.0 host, got nil")
+	}
+	if result.Port != port {
+		t.Errorf("port = %d, want %d", result.Port, port)
+	}
+}
+
+func TestProbeHostForDial(t *testing.T) {
+	tests := []struct {
+		host string
+		want string
+	}{
+		{"", "127.0.0.1"},
+		{"0.0.0.0", "127.0.0.1"},
+		{"::", "::1"},
+		{"127.0.0.1", "127.0.0.1"},
+		{"192.168.1.100", "192.168.1.100"},
+	}
+	for _, tt := range tests {
+		got := probeHostForDial(tt.host)
+		if got != tt.want {
+			t.Errorf(
+				"probeHostForDial(%q) = %q, want %q",
+				tt.host, got, tt.want,
+			)
+		}
 	}
 }
 

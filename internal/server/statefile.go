@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -88,17 +89,18 @@ func FindRunningServer(dataDir string) *StateFile {
 			os.Remove(path)
 			continue
 		}
-		// Signal 0 checks process existence without sending
-		// a signal.
-		if err := proc.Signal(os.Signal(nil)); err != nil {
+		// Signal 0 checks process existence without
+		// delivering a signal.
+		if err := proc.Signal(syscall.Signal(0)); err != nil {
 			os.Remove(path)
 			continue
 		}
 
 		// Verify the port is actually listening.
+		probeHost := probeHostForDial(sf.Host)
 		conn, err := net.DialTimeout(
 			"tcp",
-			fmt.Sprintf("127.0.0.1:%d", sf.Port),
+			net.JoinHostPort(probeHost, fmt.Sprint(sf.Port)),
 			500*time.Millisecond,
 		)
 		if err != nil {
@@ -111,4 +113,18 @@ func FindRunningServer(dataDir string) *StateFile {
 	}
 
 	return nil
+}
+
+// probeHostForDial converts a bind-all address to a loopback
+// address suitable for a TCP readiness probe, matching the
+// normalization used by the server startup checks.
+func probeHostForDial(host string) string {
+	switch host {
+	case "", "0.0.0.0":
+		return "127.0.0.1"
+	case "::":
+		return "::1"
+	default:
+		return host
+	}
 }
