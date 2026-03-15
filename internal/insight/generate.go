@@ -101,8 +101,10 @@ func GenerateStream(
 // safe to pass to agent CLI subprocesses. Matched
 // case-insensitively so Windows-style casing (Path, ComSpec)
 // is handled correctly. Using an allowlist prevents leaking
-// secrets to child processes.
+// arbitrary secrets to child processes while preserving
+// provider auth keys needed by the supported CLIs.
 var allowedKeyPrefixes = []string{
+	// System
 	"PATH",
 	"HOME", "USERPROFILE",
 	"USER", "USERNAME", "LOGNAME",
@@ -116,6 +118,16 @@ var allowedKeyPrefixes = []string{
 	"SYSTEMROOT", "COMSPEC", "PATHEXT", "WINDIR",
 	"HOMEDRIVE", "HOMEPATH",
 	"APPDATA", "LOCALAPPDATA", "PROGRAMDATA",
+
+	// Provider auth (needed by agent CLIs)
+	"ANTHROPIC_API_KEY",
+	"OPENAI_API_KEY",
+	"GEMINI_API_KEY",
+	"GOOGLE_API_KEY",
+	"GOOGLE_APPLICATION_CREDENTIALS",
+	"GITHUB_TOKEN",
+	"GH_TOKEN",
+	"COPILOT_",
 }
 
 // envKeyAllowed reports whether key (case-insensitive) is

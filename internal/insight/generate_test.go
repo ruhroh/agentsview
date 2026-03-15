@@ -176,6 +176,12 @@ func TestCollectStreamLines_LargeLine(t *testing.T) {
 
 func TestCleanEnv(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-secret")
+	t.Setenv("OPENAI_API_KEY", "sk-openai")
+	t.Setenv("GEMINI_API_KEY", "gemini-key")
+	t.Setenv("GOOGLE_API_KEY", "google-key")
+	t.Setenv("GITHUB_TOKEN", "ghp_token")
+	t.Setenv("GH_TOKEN", "gho_token")
+	t.Setenv("COPILOT_AUTH", "copilot-val")
 	t.Setenv("CLAUDECODE", "1")
 	t.Setenv("HOME", "/home/test")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "s3cret")
@@ -193,9 +199,9 @@ func TestCleanEnv(t *testing.T) {
 		envMap[strings.ToUpper(k)] = v
 	}
 
-	// Secrets and unknown vars must not pass through.
+	// Unrelated secrets and unknown vars must not pass through.
 	for _, blocked := range []string{
-		"ANTHROPIC_API_KEY", "CLAUDECODE",
+		"CLAUDECODE",
 		"AWS_SECRET_ACCESS_KEY", "UNKNOWN_VAR",
 	} {
 		if _, ok := envMap[blocked]; ok {
@@ -203,9 +209,12 @@ func TestCleanEnv(t *testing.T) {
 		}
 	}
 
-	// Allowed system vars must pass through.
+	// System vars and provider auth keys must pass through.
 	for _, allowed := range []string{
 		"HOME", "PATH", "LANG",
+		"ANTHROPIC_API_KEY", "OPENAI_API_KEY",
+		"GEMINI_API_KEY", "GOOGLE_API_KEY",
+		"GITHUB_TOKEN", "GH_TOKEN", "COPILOT_AUTH",
 	} {
 		if _, ok := envMap[allowed]; !ok {
 			t.Errorf("%s should be preserved", allowed)
@@ -244,7 +253,14 @@ func TestEnvKeyAllowed(t *testing.T) {
 		{"WINDIR", true},
 		{"HOMEDRIVE", true},
 		{"HOMEPATH", true},
-		{"ANTHROPIC_API_KEY", false},
+		{"ANTHROPIC_API_KEY", true},
+		{"OPENAI_API_KEY", true},
+		{"GEMINI_API_KEY", true},
+		{"GOOGLE_API_KEY", true},
+		{"GOOGLE_APPLICATION_CREDENTIALS", true},
+		{"GITHUB_TOKEN", true},
+		{"GH_TOKEN", true},
+		{"COPILOT_TOKEN", true}, // prefix match
 		{"AWS_SECRET_ACCESS_KEY", false},
 		{"DATABASE_URL", false},
 		{"", false},
