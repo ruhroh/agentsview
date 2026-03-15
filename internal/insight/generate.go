@@ -180,7 +180,6 @@ func generateClaude(
 		"--no-session-persistence",
 		"--tools", "",
 	)
-	cmd.Dir = os.TempDir()
 	cmd.Env = agentEnv()
 	cmd.Stdin = strings.NewReader(prompt)
 
@@ -271,7 +270,6 @@ func generateCodex(
 		"--ephemeral",
 		"-",
 	)
-	cmd.Dir = os.TempDir()
 	cmd.Env = agentEnv()
 	cmd.Stdin = strings.NewReader(prompt)
 
@@ -419,7 +417,6 @@ func generateCopilot(
 		"--no-ask-user",
 		"--disable-builtin-mcps",
 	)
-	cmd.Dir = os.TempDir()
 	cmd.Env = agentEnv()
 
 	stdoutPipe, err := cmd.StdoutPipe()
@@ -494,7 +491,6 @@ func generateGemini(
 		"--output-format", "stream-json",
 		"--sandbox",
 	)
-	cmd.Dir = os.TempDir()
 	cmd.Env = agentEnv()
 	cmd.Stdin = strings.NewReader(prompt)
 
