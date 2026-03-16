@@ -463,7 +463,7 @@ func TestStartupLock_StalePID(t *testing.T) {
 	dir := t.TempDir()
 
 	// Write a lock file with a PID that doesn't exist.
-	path := filepath.Join(dir, startupLockName)
+	path := filepath.Join(dir, startupLockFile(999999999))
 	os.WriteFile(path, []byte("999999999"), 0o644)
 
 	if isServerStarting(dir) {
@@ -482,7 +482,7 @@ func TestStartupLock_StalePID(t *testing.T) {
 func TestStartupLock_MalformedContent(t *testing.T) {
 	dir := t.TempDir()
 
-	path := filepath.Join(dir, startupLockName)
+	path := filepath.Join(dir, startupLockPrefix+"bad")
 	os.WriteFile(path, []byte("not-a-pid"), 0o644)
 
 	if isServerStarting(dir) {
@@ -502,7 +502,7 @@ func TestStartupLock_AtomicWrite(t *testing.T) {
 
 	WriteStartupLock(dir)
 
-	path := filepath.Join(dir, startupLockName)
+	path := filepath.Join(dir, startupLockFile(os.Getpid()))
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("reading lock: %v", err)

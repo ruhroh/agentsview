@@ -204,18 +204,24 @@ func isStaleByProcessStart(
 	return diff > stateFileStartTolerance
 }
 
-const startupLockName = "server.starting"
+const startupLockPrefix = "server.starting."
+
+// startupLockFile returns the lock filename for a given PID.
+func startupLockFile(pid int) string {
+	return fmt.Sprintf("%s%d", startupLockPrefix, pid)
+}
 
 // WriteStartupLock creates a lock file indicating a server is
-// starting up (syncing, binding port). Written via a temp file
-// and atomic rename to prevent concurrent readers from seeing
-// a partial/empty file.
+// starting up (syncing, binding port). Each server uses a
+// PID-specific filename so concurrent startups on different
+// ports don't clobber each other. Written via a temp file and
+// atomic rename to prevent partial reads.
 func WriteStartupLock(dataDir string) {
-	target := filepath.Join(dataDir, startupLockName)
+	name := startupLockFile(os.Getpid())
+	target := filepath.Join(dataDir, name)
 	tmp := target + ".tmp"
 	data := fmt.Appendf(nil, "%d", os.Getpid())
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		// Best-effort: fall back to direct write.
 		_ = os.WriteFile(target, data, 0o644)
 		return
 	}
@@ -225,31 +231,44 @@ func WriteStartupLock(dataDir string) {
 	}
 }
 
-// RemoveStartupLock removes the startup lock file.
+// RemoveStartupLock removes the startup lock file for the
+// current process.
 func RemoveStartupLock(dataDir string) {
-	os.Remove(filepath.Join(dataDir, startupLockName))
+	name := startupLockFile(os.Getpid())
+	os.Remove(filepath.Join(dataDir, name))
 }
 
-// isServerStarting reports whether a server is currently
-// starting up. Returns true only if the lock file exists and
-// the recorded PID is still alive.
+// isServerStarting reports whether any server is currently
+// starting up by scanning for lock files with live PIDs.
+// Stale locks (dead PIDs) are cleaned up automatically.
 func isServerStarting(dataDir string) bool {
-	path := filepath.Join(dataDir, startupLockName)
-	data, err := os.ReadFile(path)
+	entries, err := os.ReadDir(dataDir)
 	if err != nil {
 		return false
 	}
-	var pid int
-	if _, err := fmt.Sscanf(string(data), "%d", &pid); err != nil {
-		// Don't delete on parse failure — could be a
-		// partial write from a concurrent WriteStartupLock.
-		return false
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasPrefix(name, startupLockPrefix) {
+			continue
+		}
+		path := filepath.Join(dataDir, name)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var pid int
+		if _, err := fmt.Sscanf(
+			string(data), "%d", &pid,
+		); err != nil {
+			continue
+		}
+		if !processAlive(pid) {
+			os.Remove(path)
+			continue
+		}
+		return true
 	}
-	if !processAlive(pid) {
-		os.Remove(path)
-		return false
-	}
-	return true
+	return false
 }
 
 // IsStartupLocked reports whether the startup lock file exists

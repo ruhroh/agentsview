@@ -73,23 +73,25 @@ func tokenUse(sessionID string) error {
 			if !server.WaitForStartup(
 				appCfg.DataDir, startupWaitTimeout,
 			) {
-				// If the lock is still live after timeout,
-				// the server is still syncing (e.g. large
-				// archive). Don't compete with it.
 				if server.IsStartupLocked(appCfg.DataDir) {
-					return fmt.Errorf(
-						"server is still starting up "+
-							"after %s; try again later",
+					// Lock still live after timeout:
+					// the server is active (still
+					// syncing, or state file write
+					// failed). Don't compete — read
+					// the DB as-is.
+					fmt.Fprintf(os.Stderr,
+						"server still starting after "+
+							"%s, reading DB as-is\n",
 						startupWaitTimeout,
 					)
+				} else {
+					// Lock cleared but no running
+					// server. Re-check in case of
+					// transient TCP failure.
+					serverActive = server.IsServerActive(
+						appCfg.DataDir,
+					)
 				}
-				// Lock cleared but server didn't become
-				// ready. Re-check if a server is still
-				// active (covers transient TCP failure
-				// after startup finished).
-				serverActive = server.IsServerActive(
-					appCfg.DataDir,
-				)
 			}
 		} else if !server.IsServerActive(appCfg.DataDir) {
 			// The server that was alive at the first check

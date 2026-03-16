@@ -35,19 +35,23 @@ func getClockTick() int64 {
 		for i := 0; i+entrySize <= len(data); i += entrySize {
 			var tag, val uint64
 			if ptrSize == 8 {
-				tag = binary.LittleEndian.Uint64(
+				tag = binary.NativeEndian.Uint64(
 					data[i : i+8],
 				)
-				val = binary.LittleEndian.Uint64(
+				val = binary.NativeEndian.Uint64(
 					data[i+8 : i+16],
 				)
 			} else {
-				tag = uint64(binary.LittleEndian.Uint32(
-					data[i : i+4],
-				))
-				val = uint64(binary.LittleEndian.Uint32(
-					data[i+4 : i+8],
-				))
+				tag = uint64(
+					binary.NativeEndian.Uint32(
+						data[i : i+4],
+					),
+				)
+				val = uint64(
+					binary.NativeEndian.Uint32(
+						data[i+4 : i+8],
+					),
+				)
 			}
 			if tag == atClkTck && val > 0 {
 				clockTickVal = int64(val)
