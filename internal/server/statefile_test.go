@@ -227,6 +227,40 @@ func TestIsServerActive_LivePIDNoPort(t *testing.T) {
 	}
 }
 
+// TestIsServerActive_LivePIDNoPort_NoStartupLock verifies
+// the exact scenario where a server is running but the TCP
+// probe is transiently failing: IsServerActive is true,
+// FindRunningServer is nil, but IsStartupLocked is false.
+// token-use should NOT enter the wait path or fall back to
+// on-demand sync in this case.
+func TestIsServerActive_LivePIDNoPort_NoStartupLock(
+	t *testing.T,
+) {
+	dir := t.TempDir()
+
+	sf := StateFile{
+		PID:       os.Getpid(),
+		Port:      59998,
+		Host:      "127.0.0.1",
+		Version:   "1.0.0",
+		StartedAt: "2025-01-01T00:00:00Z",
+	}
+	data, _ := json.Marshal(sf)
+	os.WriteFile(
+		filepath.Join(dir, "server.59998.json"), data, 0o644,
+	)
+
+	if FindRunningServer(dir) != nil {
+		t.Error("expected FindRunningServer nil")
+	}
+	if !IsServerActive(dir) {
+		t.Error("expected IsServerActive true")
+	}
+	if IsStartupLocked(dir) {
+		t.Error("expected IsStartupLocked false")
+	}
+}
+
 // TestIsServerActive_StartupLock verifies that IsServerActive
 // returns true when only the startup lock exists.
 func TestIsServerActive_StartupLock(t *testing.T) {

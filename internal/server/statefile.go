@@ -189,6 +189,13 @@ func isServerStarting(dataDir string) bool {
 	return true
 }
 
+// IsStartupLocked reports whether the startup lock file exists
+// with a live PID. Callers use this to distinguish "server is
+// starting up" from "server is running but TCP probe failed".
+func IsStartupLocked(dataDir string) bool {
+	return isServerStarting(dataDir)
+}
+
 // IsServerActive reports whether a server process is managing
 // the database in dataDir. Returns true if:
 //   - a state file with a live PID exists (even if the port

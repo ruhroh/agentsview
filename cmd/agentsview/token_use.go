@@ -58,11 +58,16 @@ func tokenUse(sessionID string) error {
 
 	serverActive := server.IsServerActive(appCfg.DataDir)
 
-	// If a server is starting up (syncing, binding port),
-	// wait for it to finish so we read fresh data rather
-	// than returning stale results or "session not found".
+	// If a server is actively starting up (startup lock
+	// present), wait for it to finish so we read fresh data
+	// rather than returning stale results or "not found".
+	// We only wait when the startup lock is the reason
+	// IsServerActive returned true — if a state file has a
+	// live PID but the TCP probe is transiently failing,
+	// the server is running and we should just read the DB.
 	if serverActive &&
-		server.FindRunningServer(appCfg.DataDir) == nil {
+		server.FindRunningServer(appCfg.DataDir) == nil &&
+		server.IsStartupLocked(appCfg.DataDir) {
 		fmt.Fprintf(os.Stderr,
 			"server is starting up, waiting...\n")
 		if !server.WaitForStartup(
