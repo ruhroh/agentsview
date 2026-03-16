@@ -193,12 +193,19 @@ func TestFindRunningServer_BindAll(t *testing.T) {
 	}
 }
 
-// recentStartedAt returns a StartedAt timestamp from 1 hour
-// ago. This is always after the last boot, so the boot-time
-// check in hasLiveStateFile passes.
+// recentStartedAt returns a StartedAt timestamp that is
+// guaranteed to be after the last boot, so the boot-time
+// check in hasLiveStateFile passes. On fresh CI runners the
+// boot may be very recent, so we use boot time + 1s when
+// available rather than a fixed offset.
 func recentStartedAt() string {
-	return time.Now().Add(-1 * time.Hour).UTC().
-		Format(time.RFC3339)
+	started := time.Now().Add(-1 * time.Hour)
+	if bt, err := systemBootTime(); err == nil {
+		if started.Before(bt) {
+			started = bt.Add(time.Second)
+		}
+	}
+	return started.UTC().Format(time.RFC3339)
 }
 
 // TestIsServerActive_LivePIDNoPort verifies that IsServerActive
