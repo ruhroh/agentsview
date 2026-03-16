@@ -122,8 +122,29 @@ func tokenUse(sessionID string) error {
 	// for this session so the data is fresh. Re-check right
 	// before syncing to close the TOCTOU window where a
 	// server could have started since our initial probe.
+	// If the re-check detects a starting server, wait for
+	// it rather than reading potentially stale data.
 	if !serverActive {
 		serverActive = server.IsServerActive(appCfg.DataDir)
+		if serverActive &&
+			server.FindRunningServer(appCfg.DataDir) == nil &&
+			server.IsStartupLocked(appCfg.DataDir) {
+			fmt.Fprintf(os.Stderr,
+				"server is starting up, waiting...\n")
+			if server.WaitForStartup(
+				appCfg.DataDir, startupWaitTimeout,
+			) {
+				// Server is ready; read DB below.
+			} else if !server.IsStartupLocked(
+				appCfg.DataDir,
+			) {
+				// Lock cleared, no running server —
+				// startup failed. Fall back to sync.
+				serverActive = false
+			}
+			// Lock still live after timeout: server is
+			// active but slow. Read DB as-is.
+		}
 	}
 	if !serverActive {
 		engine := sync.NewEngine(database, sync.EngineConfig{
