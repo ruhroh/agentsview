@@ -3,15 +3,63 @@
 package server
 
 import (
+	"encoding/binary"
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
+	"unsafe"
 )
 
-// clkTck is the kernel clock tick rate. It is 100 on
-// virtually all Linux configurations (x86, arm64).
-const clkTck = 100
+// atClkTck is the AT_CLKTCK auxiliary vector tag.
+const atClkTck = 17
+
+// clockTick caches the runtime CLK_TCK value.
+var (
+	clockTickOnce sync.Once
+	clockTickVal  int64 = 100 // fallback
+)
+
+// getClockTick reads the kernel clock tick rate from
+// /proc/self/auxv (AT_CLKTCK). Falls back to 100 if the
+// auxiliary vector is unreadable.
+func getClockTick() int64 {
+	clockTickOnce.Do(func() {
+		data, err := os.ReadFile("/proc/self/auxv")
+		if err != nil {
+			return
+		}
+		ptrSize := int(unsafe.Sizeof(uintptr(0)))
+		entrySize := ptrSize * 2
+		for i := 0; i+entrySize <= len(data); i += entrySize {
+			var tag, val uint64
+			if ptrSize == 8 {
+				tag = binary.LittleEndian.Uint64(
+					data[i : i+8],
+				)
+				val = binary.LittleEndian.Uint64(
+					data[i+8 : i+16],
+				)
+			} else {
+				tag = uint64(binary.LittleEndian.Uint32(
+					data[i : i+4],
+				))
+				val = uint64(binary.LittleEndian.Uint32(
+					data[i+4 : i+8],
+				))
+			}
+			if tag == atClkTck && val > 0 {
+				clockTickVal = int64(val)
+				return
+			}
+			if tag == 0 { // AT_NULL
+				return
+			}
+		}
+	})
+	return clockTickVal
+}
 
 // processStartTime returns the wall-clock start time of the
 // process with the given PID by reading /proc/<pid>/stat.
@@ -56,9 +104,10 @@ func processStartTime(pid int) (time.Time, error) {
 	if err != nil {
 		return time.Time{}, err
 	}
-	startSec := startTicks / clkTck
-	startNsec := (startTicks % clkTck) *
-		(int64(time.Second) / clkTck)
+	hz := getClockTick()
+	startSec := startTicks / hz
+	startNsec := (startTicks % hz) *
+		(int64(time.Second) / hz)
 	return bootTime.Add(
 		time.Duration(startSec)*time.Second +
 			time.Duration(startNsec),

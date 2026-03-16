@@ -28,11 +28,13 @@ type Result struct {
 }
 
 // ValidAgents lists the supported agent names.
+// Copilot is excluded because its CLI does not support a
+// verified read-only/no-tools mode equivalent to the other
+// agents (--disable-builtin-mcps only blocks MCP tools).
 var ValidAgents = map[string]bool{
-	"claude":  true,
-	"codex":   true,
-	"copilot": true,
-	"gemini":  true,
+	"claude": true,
+	"codex":  true,
+	"gemini": true,
 }
 
 // GenerateFunc is the signature for insight generation,
@@ -88,8 +90,6 @@ func GenerateStream(
 	switch agent {
 	case "codex":
 		return generateCodex(ctx, path, prompt, onLog)
-	case "copilot":
-		return generateCopilot(ctx, path, prompt, onLog)
 	case "gemini":
 		return generateGemini(ctx, path, prompt, onLog)
 	default:

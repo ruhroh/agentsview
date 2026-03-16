@@ -338,17 +338,22 @@ func runServe(args []string) {
 	}
 
 	// Server is ready — write the definitive state file with the
-	// final port and remove the startup lock.
+	// final port and remove the startup lock. If the state file
+	// write fails, keep the startup lock as a fallback "server
+	// is active" marker so token-use doesn't start a competing
+	// on-demand sync against our live DB.
 	if _, sfErr := server.WriteStateFile(
 		cfg.DataDir, cfg.Host, cfg.Port, version,
 	); sfErr != nil {
 		log.Printf(
-			"warning: could not write state file: %v", sfErr,
+			"warning: could not write state file: %v"+
+				" (keeping startup lock as fallback)",
+			sfErr,
 		)
 	} else {
 		defer server.RemoveStateFile(cfg.DataDir, cfg.Port)
+		server.RemoveStartupLock(cfg.DataDir)
 	}
-	server.RemoveStartupLock(cfg.DataDir)
 
 	localURL := fmt.Sprintf("http://%s:%d", cfg.Host, cfg.Port)
 	publicURL := browserURL(cfg)
