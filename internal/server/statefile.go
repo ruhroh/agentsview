@@ -109,36 +109,29 @@ func FindRunningServer(dataDir string) *StateFile {
 	return nil
 }
 
-// maxStateFileAge is the maximum age of a state file that
-// can be trusted for PID-only liveness checks (no TCP probe).
-// After a crash, a lingering state file can become a false
-// positive if the OS reuses the PID for an unrelated process.
-// Files older than this with no port connectivity are treated
-// as stale.
-const maxStateFileAge = 7 * 24 * time.Hour
-
 // hasLiveStateFile reports whether any server state file in
 // dataDir has a live PID, regardless of port connectivity.
 // Unlike FindRunningServer, this returns true even during
-// transient TCP probe failures.
-//
-// To mitigate PID reuse after a crash, files whose StartedAt
-// is older than maxStateFileAge are cleaned up instead of
-// being trusted by PID alone.
+// transient TCP probe failures. A live PID is trusted
+// unconditionally — servers can legitimately run for weeks,
+// and PID reuse on modern systems (large PID spaces) is rare
+// enough that a false positive (skipping one on-demand sync)
+// is preferable to deleting a long-running server's state
+// file.
 func hasLiveStateFile(dataDir string) bool {
 	entries, err := os.ReadDir(dataDir)
 	if err != nil {
 		return false
 	}
-	now := time.Now()
 	for _, e := range entries {
 		name := e.Name()
 		if !strings.HasPrefix(name, "server.") ||
 			!strings.HasSuffix(name, ".json") {
 			continue
 		}
-		path := filepath.Join(dataDir, name)
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(
+			filepath.Join(dataDir, name),
+		)
 		if err != nil {
 			continue
 		}
@@ -146,22 +139,9 @@ func hasLiveStateFile(dataDir string) bool {
 		if err := json.Unmarshal(data, &sf); err != nil {
 			continue
 		}
-		if !processAlive(sf.PID) {
-			continue
+		if processAlive(sf.PID) {
+			return true
 		}
-		// If the file is too old, the live PID is likely
-		// an unrelated process that reused the number
-		// after a crash. Clean up and skip.
-		if sf.StartedAt != "" {
-			started, err := time.Parse(
-				time.RFC3339, sf.StartedAt,
-			)
-			if err == nil && now.Sub(started) > maxStateFileAge {
-				os.Remove(path)
-				continue
-			}
-		}
-		return true
 	}
 	return false
 }

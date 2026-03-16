@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 )
 
 func TestWriteAndRemoveStateFile(t *testing.T) {
@@ -199,17 +198,12 @@ func TestFindRunningServer_BindAll(t *testing.T) {
 func TestIsServerActive_LivePIDNoPort(t *testing.T) {
 	dir := t.TempDir()
 
-	// Write a state file with our own PID but a port that
-	// nothing is listening on. Use a recent StartedAt so the
-	// age check passes.
-	recentTime := time.Now().Add(-1 * time.Hour).UTC().
-		Format(time.RFC3339)
 	sf := StateFile{
 		PID:       os.Getpid(),
 		Port:      59999,
 		Host:      "127.0.0.1",
 		Version:   "1.0.0",
-		StartedAt: recentTime,
+		StartedAt: "2025-01-01T00:00:00Z",
 	}
 	data, _ := json.Marshal(sf)
 	path := filepath.Join(dir, "server.59999.json")
@@ -242,14 +236,12 @@ func TestIsServerActive_LivePIDNoPort_NoStartupLock(
 ) {
 	dir := t.TempDir()
 
-	recentTime := time.Now().Add(-1 * time.Hour).UTC().
-		Format(time.RFC3339)
 	sf := StateFile{
 		PID:       os.Getpid(),
 		Port:      59998,
 		Host:      "127.0.0.1",
 		Version:   "1.0.0",
-		StartedAt: recentTime,
+		StartedAt: "2025-01-01T00:00:00Z",
 	}
 	data, _ := json.Marshal(sf)
 	os.WriteFile(
@@ -267,34 +259,33 @@ func TestIsServerActive_LivePIDNoPort_NoStartupLock(
 	}
 }
 
-// TestIsServerActive_OldStateFileAgedOut verifies that a state
-// file with a live PID but a StartedAt older than
-// maxStateFileAge is cleaned up. This mitigates PID reuse
-// after a crash where an unrelated process inherits the PID.
-func TestIsServerActive_OldStateFileAgedOut(t *testing.T) {
+// TestIsServerActive_LongRunningServer verifies that a
+// server running for weeks is still detected as active even
+// when the TCP probe transiently fails. The state file must
+// not be deleted regardless of age.
+func TestIsServerActive_LongRunningServer(t *testing.T) {
 	dir := t.TempDir()
 
-	oldTime := time.Now().Add(-8 * 24 * time.Hour).UTC().
-		Format(time.RFC3339)
+	// State file from 30 days ago — server has been running
+	// for a month.
 	sf := StateFile{
 		PID:       os.Getpid(),
 		Port:      59997,
 		Host:      "127.0.0.1",
 		Version:   "1.0.0",
-		StartedAt: oldTime,
+		StartedAt: "2024-01-01T00:00:00Z",
 	}
 	data, _ := json.Marshal(sf)
 	path := filepath.Join(dir, "server.59997.json")
 	os.WriteFile(path, data, 0o644)
 
-	// Should return false — file is too old for PID-only trust.
-	if IsServerActive(dir) {
-		t.Error("expected false for aged-out state file")
+	if !IsServerActive(dir) {
+		t.Error("expected IsServerActive true for old but live PID")
 	}
 
-	// File should be cleaned up.
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Error("old state file was not cleaned up")
+	// State file must NOT be deleted.
+	if _, err := os.Stat(path); err != nil {
+		t.Error("state file was deleted for long-running server")
 	}
 }
 
