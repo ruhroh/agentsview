@@ -208,6 +208,41 @@ func TestProbeHostForDial(t *testing.T) {
 	}
 }
 
+func TestStartupLock_OwnProcess(t *testing.T) {
+	dir := t.TempDir()
+
+	if IsServerStarting(dir) {
+		t.Fatal("expected false before lock written")
+	}
+
+	WriteStartupLock(dir)
+	if !IsServerStarting(dir) {
+		t.Fatal("expected true after lock written")
+	}
+
+	RemoveStartupLock(dir)
+	if IsServerStarting(dir) {
+		t.Fatal("expected false after lock removed")
+	}
+}
+
+func TestStartupLock_StalePID(t *testing.T) {
+	dir := t.TempDir()
+
+	// Write a lock file with a PID that doesn't exist.
+	path := filepath.Join(dir, startupLockName)
+	os.WriteFile(path, []byte("999999999"), 0o644)
+
+	if IsServerStarting(dir) {
+		t.Fatal("expected false for stale PID")
+	}
+
+	// Stale lock should be cleaned up.
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("stale startup lock not cleaned up")
+	}
+}
+
 func TestStateFileName(t *testing.T) {
 	tests := []struct {
 		port int

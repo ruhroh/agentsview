@@ -53,6 +53,7 @@ func tokenUse(sessionID string) error {
 	serverRunning := server.FindRunningServer(
 		appCfg.DataDir,
 	) != nil
+	serverStarting := server.IsServerStarting(appCfg.DataDir)
 
 	database, err := db.Open(appCfg.DBPath)
 	if err != nil {
@@ -70,9 +71,10 @@ func tokenUse(sessionID string) error {
 		database.SetCursorSecret(secret)
 	}
 
-	// If no server is keeping the DB in sync, do an on-demand
-	// sync for this session so the data is fresh.
-	if !serverRunning {
+	// If no server is keeping the DB in sync and no server is
+	// starting up (which would be running its own initial
+	// sync), do an on-demand sync for this session.
+	if !serverRunning && !serverStarting {
 		engine := sync.NewEngine(database, sync.EngineConfig{
 			AgentDirs:               appCfg.AgentDirs,
 			Machine:                 "local",

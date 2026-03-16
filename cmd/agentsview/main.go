@@ -194,6 +194,14 @@ func runServe(args []string) {
 	)
 	defer stop()
 
+	// Write a startup lock so CLI commands like token-use
+	// know a server is starting and don't kick off a
+	// competing sync during the initial sync/resync window.
+	// The lock is removed once the state file is written
+	// (after the port is known and the listener is ready).
+	server.WriteStartupLock(cfg.DataDir)
+	defer server.RemoveStartupLock(cfg.DataDir)
+
 	engine := sync.NewEngine(database, sync.EngineConfig{
 		AgentDirs:               cfg.AgentDirs,
 		Machine:                 "local",
@@ -329,15 +337,18 @@ func runServe(args []string) {
 		}
 	}
 
-	stateFilePath, sfErr := server.WriteStateFile(
+	// Server is ready — write the definitive state file with the
+	// final port and remove the startup lock.
+	if _, sfErr := server.WriteStateFile(
 		cfg.DataDir, cfg.Host, cfg.Port, version,
-	)
-	if sfErr != nil {
-		log.Printf("warning: could not write state file: %v", sfErr)
+	); sfErr != nil {
+		log.Printf(
+			"warning: could not write state file: %v", sfErr,
+		)
 	} else {
 		defer server.RemoveStateFile(cfg.DataDir, cfg.Port)
 	}
-	_ = stateFilePath
+	server.RemoveStartupLock(cfg.DataDir)
 
 	localURL := fmt.Sprintf("http://%s:%d", cfg.Host, cfg.Port)
 	publicURL := browserURL(cfg)

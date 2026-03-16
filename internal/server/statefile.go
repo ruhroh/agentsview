@@ -109,6 +109,44 @@ func FindRunningServer(dataDir string) *StateFile {
 	return nil
 }
 
+const startupLockName = "server.starting"
+
+// WriteStartupLock creates a lock file indicating a server is
+// starting up (syncing, binding port). CLI commands check this
+// to avoid competing syncs during the startup window.
+func WriteStartupLock(dataDir string) {
+	path := filepath.Join(dataDir, startupLockName)
+	_ = os.WriteFile(path, fmt.Appendf(
+		nil, "%d", os.Getpid(),
+	), 0o644)
+}
+
+// RemoveStartupLock removes the startup lock file.
+func RemoveStartupLock(dataDir string) {
+	os.Remove(filepath.Join(dataDir, startupLockName))
+}
+
+// IsServerStarting reports whether a server is currently
+// starting up. Returns true only if the lock file exists and
+// the recorded PID is still alive.
+func IsServerStarting(dataDir string) bool {
+	path := filepath.Join(dataDir, startupLockName)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var pid int
+	if _, err := fmt.Sscanf(string(data), "%d", &pid); err != nil {
+		os.Remove(path)
+		return false
+	}
+	if !processAlive(pid) {
+		os.Remove(path)
+		return false
+	}
+	return true
+}
+
 // probeHostForDial converts a bind-all address to a loopback
 // address suitable for a TCP readiness probe, matching the
 // normalization used by the server startup checks.
