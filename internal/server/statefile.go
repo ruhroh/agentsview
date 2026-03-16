@@ -109,17 +109,24 @@ func FindRunningServer(dataDir string) *StateFile {
 	return nil
 }
 
+// stateFileStartTolerance is the maximum acceptable
+// difference between the state file's StartedAt and the
+// actual process start time. Accounts for the delay between
+// process creation and WriteStateFile being called.
+const stateFileStartTolerance = 120 * time.Second
+
 // hasLiveStateFile reports whether any server state file in
 // dataDir has a live PID, regardless of port connectivity.
 // Unlike FindRunningServer, this returns true even during
 // transient TCP probe failures.
 //
-// To mitigate PID reuse after a reboot (where the OS can
-// assign the same PID to an unrelated process), state files
-// whose StartedAt predates the system boot time are treated
-// as stale and removed. Between reboots, PID reuse requires
-// cycling through the full PID space which is large on modern
-// systems.
+// Staleness detection uses two layers:
+//  1. Boot time: state files from before the last reboot are
+//     removed (PID reuse across reboots).
+//  2. Process start time: if available, the recorded
+//     StartedAt is compared against the actual process
+//     creation time. A mismatch beyond the tolerance
+//     indicates same-boot PID reuse.
 func hasLiveStateFile(dataDir string) bool {
 	bootTime, _ := systemBootTime()
 
@@ -145,20 +152,50 @@ func hasLiveStateFile(dataDir string) bool {
 		if !processAlive(sf.PID) {
 			continue
 		}
-		// If the state file predates the last boot, the PID
-		// belongs to a different process. Clean up.
-		if !bootTime.IsZero() && sf.StartedAt != "" {
-			started, err := time.Parse(
-				time.RFC3339, sf.StartedAt,
-			)
-			if err == nil && started.Before(bootTime) {
+
+		started, parseErr := time.Parse(
+			time.RFC3339, sf.StartedAt,
+		)
+
+		// Layer 1: boot time check.
+		if !bootTime.IsZero() && parseErr == nil {
+			if started.Before(bootTime) {
 				os.Remove(path)
 				continue
 			}
 		}
+
+		// Layer 2: process start time check.
+		if parseErr == nil {
+			if isStaleByProcessStart(
+				sf.PID, started,
+			) {
+				os.Remove(path)
+				continue
+			}
+		}
+
 		return true
 	}
 	return false
+}
+
+// isStaleByProcessStart returns true if the process's actual
+// creation time differs from the recorded StartedAt by more
+// than stateFileStartTolerance, indicating PID reuse.
+func isStaleByProcessStart(
+	pid int, startedAt time.Time,
+) bool {
+	actual, err := processStartTime(pid)
+	if err != nil {
+		// Platform doesn't support start time — can't tell.
+		return false
+	}
+	diff := actual.Sub(startedAt)
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff > stateFileStartTolerance
 }
 
 const startupLockName = "server.starting"

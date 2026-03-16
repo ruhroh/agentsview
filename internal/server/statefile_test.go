@@ -193,12 +193,15 @@ func TestFindRunningServer_BindAll(t *testing.T) {
 	}
 }
 
-// recentStartedAt returns a StartedAt timestamp that is
-// guaranteed to be after the last boot, so the boot-time
-// check in hasLiveStateFile passes. On fresh CI runners the
-// boot may be very recent, so we use boot time + 1s when
-// available rather than a fixed offset.
+// recentStartedAt returns a StartedAt timestamp that passes
+// both the boot-time and process-start-time checks in
+// hasLiveStateFile. When processStartTime is available, we
+// use the actual start time of the test process; otherwise
+// we fall back to a time that is after boot.
 func recentStartedAt() string {
+	if st, err := processStartTime(os.Getpid()); err == nil {
+		return st.UTC().Format(time.RFC3339)
+	}
 	started := time.Now().Add(-1 * time.Hour)
 	if bt, err := systemBootTime(); err == nil {
 		if started.Before(bt) {
@@ -276,28 +279,19 @@ func TestIsServerActive_LivePIDNoPort_NoStartupLock(
 }
 
 // TestIsServerActive_LongRunningServer verifies that a
-// server running for weeks is still detected as active even
-// when the TCP probe transiently fails. The state file must
-// not be deleted regardless of age, as long as it post-dates
-// the last boot.
+// state file with a live PID is detected as active even
+// when the TCP probe transiently fails. Uses the actual
+// process start time to pass both boot-time and
+// process-start-time validation layers.
 func TestIsServerActive_LongRunningServer(t *testing.T) {
 	dir := t.TempDir()
-
-	// Use a StartedAt that's 30 days ago but after boot.
-	// (If the machine has been up less than 30 days, use a
-	// time just after boot.)
-	bootTime, btErr := systemBootTime()
-	startedAt := time.Now().Add(-30 * 24 * time.Hour)
-	if btErr == nil && startedAt.Before(bootTime) {
-		startedAt = bootTime.Add(time.Second)
-	}
 
 	sf := StateFile{
 		PID:       os.Getpid(),
 		Port:      59997,
 		Host:      "127.0.0.1",
 		Version:   "1.0.0",
-		StartedAt: startedAt.UTC().Format(time.RFC3339),
+		StartedAt: recentStartedAt(),
 	}
 	data, _ := json.Marshal(sf)
 	path := filepath.Join(dir, "server.59997.json")
@@ -501,6 +495,115 @@ func TestProbeHostForDial(t *testing.T) {
 				tt.host, got, tt.want,
 			)
 		}
+	}
+}
+
+// TestProcessStartTime_OwnProcess verifies that
+// processStartTime returns a reasonable time for the
+// current process.
+func TestProcessStartTime_OwnProcess(t *testing.T) {
+	st, err := processStartTime(os.Getpid())
+	if err != nil {
+		t.Skipf("processStartTime not available: %v", err)
+	}
+	// Our process started before now.
+	if st.After(time.Now()) {
+		t.Errorf(
+			"process start time %v is in the future",
+			st,
+		)
+	}
+	// And after boot (if available).
+	if bt, btErr := systemBootTime(); btErr == nil {
+		if st.Before(bt) {
+			t.Errorf(
+				"start %v is before boot %v", st, bt,
+			)
+		}
+	}
+}
+
+// TestIsServerActive_SameBootPIDReuse verifies that a state
+// file from the current boot whose PID is alive but belongs
+// to a different process (same-boot PID reuse) is detected
+// as stale and cleaned up. We simulate this by writing a
+// state file with our own PID but a StartedAt far from our
+// actual process start time.
+func TestIsServerActive_SameBootPIDReuse(t *testing.T) {
+	procStart, err := processStartTime(os.Getpid())
+	if err != nil {
+		t.Skipf("processStartTime not available: %v", err)
+	}
+
+	dir := t.TempDir()
+
+	// StartedAt is 1 hour before our actual start time,
+	// but after boot. This simulates another server that
+	// wrote this state file, then crashed, and our PID
+	// was reused.
+	fakeStarted := procStart.Add(-1 * time.Hour)
+	bt, btErr := systemBootTime()
+	if btErr == nil && fakeStarted.Before(bt) {
+		// If that would be pre-boot, place it just after
+		// boot but still well before our start time.
+		fakeStarted = bt.Add(time.Second)
+	}
+	// If fakeStarted is within tolerance of procStart,
+	// we can't reliably test this case.
+	diff := procStart.Sub(fakeStarted)
+	if diff < 0 {
+		diff = -diff
+	}
+	if diff <= stateFileStartTolerance {
+		t.Skip("cannot simulate PID reuse: " +
+			"fake start too close to actual")
+	}
+
+	sf := StateFile{
+		PID:     os.Getpid(),
+		Port:    59995,
+		Host:    "127.0.0.1",
+		Version: "1.0.0",
+		StartedAt: fakeStarted.UTC().
+			Format(time.RFC3339),
+	}
+	data, _ := json.Marshal(sf)
+	path := filepath.Join(dir, "server.59995.json")
+	os.WriteFile(path, data, 0o644)
+
+	if IsServerActive(dir) {
+		t.Error(
+			"expected false for same-boot PID reuse",
+		)
+	}
+
+	// Stale file should be cleaned up.
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error(
+			"state file not cleaned up after " +
+				"PID reuse detection",
+		)
+	}
+}
+
+// TestIsStaleByProcessStart_OwnPID verifies that
+// isStaleByProcessStart returns false for a state file that
+// matches our own process start time.
+func TestIsStaleByProcessStart_OwnPID(t *testing.T) {
+	procStart, err := processStartTime(os.Getpid())
+	if err != nil {
+		t.Skipf("processStartTime not available: %v", err)
+	}
+
+	// Within tolerance — not stale.
+	if isStaleByProcessStart(os.Getpid(), procStart) {
+		t.Error("expected false for matching start time")
+	}
+
+	// Far off — stale.
+	fakeTime := procStart.Add(-1 * time.Hour)
+	if !isStaleByProcessStart(os.Getpid(), fakeTime) {
+		t.Error("expected true for mismatched start time")
 	}
 }
 
