@@ -173,6 +173,13 @@ func runServe(args []string) {
 	if err := validateServeConfig(cfg); err != nil {
 		fatal("invalid serve config: %v", err)
 	}
+
+	// Write the startup lock immediately after config setup,
+	// before opening the DB, so token-use never sees a window
+	// with no lock and no state file during startup.
+	server.WriteStartupLock(cfg.DataDir)
+	defer server.RemoveStartupLock(cfg.DataDir)
+
 	database := mustOpenDB(cfg)
 	defer database.Close()
 
@@ -193,14 +200,6 @@ func runServe(args []string) {
 		context.Background(), os.Interrupt, syscall.SIGTERM,
 	)
 	defer stop()
-
-	// Write a startup lock so CLI commands like token-use
-	// know a server is starting and don't kick off a
-	// competing sync during the initial sync/resync window.
-	// The lock is removed once the state file is written
-	// (after the port is known and the listener is ready).
-	server.WriteStartupLock(cfg.DataDir)
-	defer server.RemoveStartupLock(cfg.DataDir)
 
 	engine := sync.NewEngine(database, sync.EngineConfig{
 		AgentDirs:               cfg.AgentDirs,
