@@ -290,7 +290,7 @@
             role="button"
             tabindex="0"
             onclick={() => insights.selectTask(task.clientId)}
-            onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") insights.selectTask(task.clientId); }}
+            onkeydown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) insights.selectTask(task.clientId); }}
           >
             <div class="task-indicator">
               {#if task.status === "generating"}

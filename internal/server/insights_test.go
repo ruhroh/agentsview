@@ -225,6 +225,30 @@ func TestGenerateInsight_ErrorMessageStripsStderr(t *testing.T) {
 	}
 }
 
+func TestGenerateInsight_ErrorMessageStripsRaw(t *testing.T) {
+	stubGen := func(
+		_ context.Context, _, _ string,
+	) (insight.Result, error) {
+		return insight.Result{}, fmt.Errorf(
+			"claude returned empty result\nraw: {\"type\":\"result\",\"result\":\"\"}",
+		)
+	}
+	te := setupWithServerOpts(t, []server.Option{
+		server.WithGenerateFunc(stubGen),
+	})
+
+	w := te.post(t, "/api/v1/insights/generate",
+		`{"type":"daily_activity","date_from":"2025-01-15","date_to":"2025-01-15"}`)
+	assertStatus(t, w, http.StatusOK)
+	body := w.Body.String()
+	if !strings.Contains(body, "claude returned empty result") {
+		t.Fatalf("expected error detail in response, got: %s", body)
+	}
+	if strings.Contains(body, "raw:") {
+		t.Fatalf("expected raw payload to be stripped from client message")
+	}
+}
+
 func TestGenerateInsight_InitialStatusWriteFailureSkipsGeneration(t *testing.T) {
 	var called atomic.Bool
 	te := setupWithServerOpts(t, []server.Option{
