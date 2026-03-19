@@ -1,5 +1,6 @@
 import * as api from "../api/client.js";
 import type { Message } from "../api/types.js";
+import { computeMainModel } from "../utils/model.js";
 
 const MESSAGE_PAGE_SIZE = 1000;
 const FULL_SESSION_MESSAGE_THRESHOLD = 20_000;
@@ -18,6 +19,11 @@ class MessagesStore {
   messageCount: number = $state(0);
   hasOlder: boolean = $state(false);
   loadingOlder: boolean = $state(false);
+  mainModel: string = $derived(
+    !this.loading && !this.hasOlder
+      ? computeMainModel(this.messages)
+      : "",
+  );
   private abortController: AbortController | null = null;
   private reloadPromise: Promise<void> | null = null;
   private reloadSessionId: string | null = null;

@@ -6,7 +6,6 @@
   } from "../../utils/content-parser.js";
   import { formatTimestamp } from "../../utils/format.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
-  import { computeMainModel } from "../../utils/model.js";
   import { messages as messagesStore } from "../../stores/messages.svelte.js";
   import ThinkingBlock from "./ThinkingBlock.svelte";
   import ToolBlock from "./ToolBlock.svelte";
@@ -41,9 +40,8 @@
 
   let mainModel = $derived(
     !isSubagentContext &&
-    messagesStore.sessionId === message.session_id &&
-    !messagesStore.hasOlder
-      ? computeMainModel(messagesStore.messages)
+    messagesStore.sessionId === message.session_id
+      ? messagesStore.mainModel
       : "",
   );
 

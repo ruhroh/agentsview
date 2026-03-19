@@ -18,7 +18,6 @@
   } from "../../utils/resume.js";
 
   import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
-  import { computeMainModel } from "../../utils/model.js";
   import { messages as messagesStore } from "../../stores/messages.svelte.js";
 
   interface Props {
@@ -60,8 +59,8 @@
   let sessionContextTokens = $derived(session?.peak_context_tokens ?? 0);
 
   let mainModel = $derived(
-    messagesStore.sessionId === session?.id && !messagesStore.hasOlder
-      ? computeMainModel(messagesStore.messages)
+    messagesStore.sessionId === session?.id
+      ? messagesStore.mainModel
       : "",
   );
 
