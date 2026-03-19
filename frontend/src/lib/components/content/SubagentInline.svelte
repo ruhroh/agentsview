@@ -58,7 +58,9 @@
     sessionMeta ? `${sessionMeta.message_count} messages` : null,
   );
   let subagentModel = $derived(
-    messages ? computeMainModel(messages) : "",
+    messages && messages.length >= (sessionMeta?.message_count ?? 0)
+      ? computeMainModel(messages)
+      : "",
   );
 </script>
 
