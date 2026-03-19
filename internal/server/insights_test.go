@@ -198,7 +198,31 @@ func TestGenerateInsight_DefaultAgent(t *testing.T) {
 		`{"type":"daily_activity","date_from":"2025-01-15","date_to":"2025-01-15"}`)
 	assertStatus(t, w, http.StatusOK)
 	assertBodyContains(t, w, "event: error")
-	assertBodyContains(t, w, "claude generation failed")
+	assertBodyContains(t, w, "stub: no CLI")
+}
+
+func TestGenerateInsight_ErrorMessageStripsStderr(t *testing.T) {
+	stubGen := func(
+		_ context.Context, _, _ string,
+	) (insight.Result, error) {
+		return insight.Result{}, fmt.Errorf(
+			"claude CLI failed: exit status 1\nstderr: some debug output",
+		)
+	}
+	te := setupWithServerOpts(t, []server.Option{
+		server.WithGenerateFunc(stubGen),
+	})
+
+	w := te.post(t, "/api/v1/insights/generate",
+		`{"type":"daily_activity","date_from":"2025-01-15","date_to":"2025-01-15"}`)
+	assertStatus(t, w, http.StatusOK)
+	body := w.Body.String()
+	if !strings.Contains(body, "claude CLI failed: exit status 1") {
+		t.Fatalf("expected error detail in response, got: %s", body)
+	}
+	if strings.Contains(body, "some debug output") {
+		t.Fatalf("expected stderr to be stripped from client message")
+	}
 }
 
 func TestGenerateInsight_InitialStatusWriteFailureSkipsGeneration(t *testing.T) {

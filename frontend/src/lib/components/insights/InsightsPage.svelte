@@ -314,6 +314,7 @@
               {#if task.logs.length > 0}
                 <div
                   class="task-logs"
+                  class:task-logs-error={task.status === "error"}
                   role="log"
                   aria-live="polite"
                 >
@@ -839,6 +840,15 @@
     font-family: var(--font-mono);
     font-size: 10px;
     line-height: 1.4;
+  }
+
+  .task-logs-error {
+    max-height: 240px;
+    border-color: color-mix(
+      in srgb,
+      var(--accent-red) 30%,
+      var(--border-muted)
+    );
   }
 
   .task-log-line {
