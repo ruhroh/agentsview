@@ -18,6 +18,8 @@
   } from "../../utils/resume.js";
 
   import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
+  import { computeMainModel } from "../../utils/model.js";
+  import { messages as messagesStore } from "../../stores/messages.svelte.js";
 
   interface Props {
     session: Session | undefined;
@@ -56,6 +58,8 @@
   });
 
   let sessionContextTokens = $derived(session?.peak_context_tokens ?? 0);
+
+  let mainModel = $derived(computeMainModel(messagesStore.messages));
 
   function sessionDisplayId(id: string): string {
     const idx = id.indexOf(":");
@@ -447,6 +451,9 @@
           {formatTokenCount(sessionContextTokens)} ctx / {formatTokenCount(session?.total_output_tokens ?? 0)} out
         </span>
       {/if}
+      {#if mainModel}
+        <span class="model-badge" title={mainModel}>{mainModel}</span>
+      {/if}
       <div class="actions-wrapper">
         <button
           class="find-btn"
@@ -703,6 +710,15 @@
     flex-shrink: 0;
   }
 
+  .model-badge {
+    font-size: 10px;
+    color: var(--text-muted);
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--bg-tertiary);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
 
   .actions-wrapper {
     position: relative;
