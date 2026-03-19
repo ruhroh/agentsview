@@ -313,6 +313,48 @@ func TestCopilotUserMessageCount(t *testing.T) {
 	assertEqual(t, 2, sess.UserMessageCount, "UserMessageCount")
 }
 
+func TestParseCopilotSession_ModelChange(t *testing.T) {
+	path := writeCopilotJSONL(t,
+		`{"type":"session.start","data":{"sessionId":"model-test"},"timestamp":"2025-01-15T10:00:00Z"}`,
+		`{"type":"session.model_change","data":{"newModel":"claude-sonnet-4.6"},"timestamp":"2025-01-15T10:00:01Z"}`,
+		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2025-01-15T10:00:02Z"}`,
+		`{"type":"assistant.message","data":{"content":"Hi there"},"timestamp":"2025-01-15T10:00:03Z"}`,
+	)
+
+	_, msgs := parseAndValidateHelper(t, path, "m", 2)
+
+	assertEqual(t, "claude-sonnet-4.6", msgs[1].Model, "msgs[1].Model")
+	assertEqual(t, "", msgs[0].Model, "msgs[0].Model")
+}
+
+func TestParseCopilotSession_NoModel(t *testing.T) {
+	path := writeCopilotJSONL(t,
+		`{"type":"session.start","data":{"sessionId":"no-model"},"timestamp":"2025-01-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2025-01-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"Hi"},"timestamp":"2025-01-15T10:00:02Z"}`,
+	)
+
+	_, msgs := parseAndValidateHelper(t, path, "m", 2)
+	assertEqual(t, "", msgs[1].Model, "msgs[1].Model")
+}
+
+func TestParseCopilotSession_ModelMidSessionChange(t *testing.T) {
+	path := writeCopilotJSONL(t,
+		`{"type":"session.start","data":{"sessionId":"switch-test"},"timestamp":"2025-01-15T10:00:00Z"}`,
+		`{"type":"session.model_change","data":{"newModel":"claude-sonnet-4.6"},"timestamp":"2025-01-15T10:00:01Z"}`,
+		`{"type":"user.message","data":{"content":"First"},"timestamp":"2025-01-15T10:00:02Z"}`,
+		`{"type":"assistant.message","data":{"content":"Reply one"},"timestamp":"2025-01-15T10:00:03Z"}`,
+		`{"type":"session.model_change","data":{"newModel":"claude-haiku-4.5"},"timestamp":"2025-01-15T10:00:04Z"}`,
+		`{"type":"user.message","data":{"content":"Second"},"timestamp":"2025-01-15T10:00:05Z"}`,
+		`{"type":"assistant.message","data":{"content":"Reply two"},"timestamp":"2025-01-15T10:00:06Z"}`,
+	)
+
+	_, msgs := parseAndValidateHelper(t, path, "m", 4)
+
+	assertEqual(t, "claude-sonnet-4.6", msgs[1].Model, "msgs[1].Model")
+	assertEqual(t, "claude-haiku-4.5", msgs[3].Model, "msgs[3].Model")
+}
+
 func TestSessionIDFromPath(t *testing.T) {
 	tests := []struct {
 		path string
