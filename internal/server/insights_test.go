@@ -244,7 +244,7 @@ func TestGenerateInsight_ErrorMessageStripsRaw(t *testing.T) {
 	if !strings.Contains(body, "claude returned empty result") {
 		t.Fatalf("expected error detail in response, got: %s", body)
 	}
-	if strings.Contains(body, "raw:") {
+	if strings.Contains(body, `"type":"result"`) {
 		t.Fatalf("expected raw payload to be stripped from client message")
 	}
 }
