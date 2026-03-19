@@ -73,8 +73,9 @@ The reset will remove our spec and plan. Re-create them from the
 commits we made (they're in the reflog).
 
 ```bash
-git cherry-pick <spec-commit-sha> --no-verify
-git cherry-pick <plan-commit-sha> --no-verify
+git cherry-pick 48a4aad --no-verify
+git cherry-pick 393b241 --no-verify
+git cherry-pick e3d48e7 --no-verify
 ```
 
 - [ ] **Step 3: Verify clean state**
@@ -468,7 +469,7 @@ let mainModel = $derived(
 );
 
 let offMainModel = $derived.by((): string => {
-  if (isUser || !message.model) return "";
+  if (isUser || !message.model || isSubagentContext) return "";
   return message.model !== mainModel ? message.model : "";
 });
 ```
