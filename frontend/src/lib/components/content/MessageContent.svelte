@@ -6,6 +6,8 @@
   } from "../../utils/content-parser.js";
   import { formatTimestamp } from "../../utils/format.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
+  import { computeMainModel } from "../../utils/model.js";
+  import { messages as messagesStore } from "../../stores/messages.svelte.js";
   import ThinkingBlock from "./ThinkingBlock.svelte";
   import ToolBlock from "./ToolBlock.svelte";
   import CodeBlock from "./CodeBlock.svelte";
@@ -36,6 +38,13 @@
   );
 
   let isUser = $derived(message.role === "user");
+
+  let mainModel = $derived(computeMainModel(messagesStore.messages));
+
+  let offMainModel = $derived.by((): string => {
+    if (isUser || !message.model || isSubagentContext) return "";
+    return message.model !== mainModel ? message.model : "";
+  });
 
   /** Resolve the session that owns this message, falling back to activeSession. */
   let owningSession = $derived(
@@ -202,6 +211,11 @@
     <span class="timestamp">
       {formatTimestamp(message.timestamp)}
     </span>
+    {#if offMainModel}
+      <span class="message-model" title={offMainModel}>
+        {offMainModel}
+      </span>
+    {/if}
   </div>
 
   <div class="message-body">
@@ -293,6 +307,17 @@
     font-size: 12px;
     color: var(--text-muted);
     margin-left: auto;
+  }
+
+  .message-model {
+    font-size: 10px;
+    color: var(--text-muted);
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: var(--bg-tertiary);
+    white-space: nowrap;
+    flex-shrink: 0;
+    opacity: 0.8;
   }
 
   .copy-btn {
