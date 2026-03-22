@@ -263,7 +263,7 @@ func (s *Store) Search(
 			WHERE m.content ILIKE '%%' || $1 || '%%' ESCAPE E'\\'
 				AND s.deleted_at IS NULL
 				AND m.is_system = FALSE
-				AND `+db.SystemPrefixSQL("m.content", "m.role", true)+`
+				AND `+db.SystemPrefixSQL("m.content", "m.role")+`
 				%s
 			ORDER BY m.session_id,
 				POSITION(LOWER($2) IN LOWER(m.content)) ASC,
@@ -293,7 +293,7 @@ func (s *Store) Search(
 					SELECT 1 FROM messages mx
 					WHERE mx.session_id = s.id
 					  AND mx.is_system = FALSE
-					  AND `+db.SystemPrefixSQL("mx.content", "mx.role", true)+`
+					  AND `+db.SystemPrefixSQL("mx.content", "mx.role")+`
 				)
 				AND s.id NOT IN (SELECT session_id FROM msg_matches)
 				%s

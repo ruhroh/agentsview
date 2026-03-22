@@ -29,16 +29,10 @@ var SystemMsgPrefixes = []string{
 
 // SystemPrefixSQL returns a SQL clause that excludes user messages
 // matching any system prefix. The column alias for content must be
-// passed (e.g. "m.content" or "m2.content"). Uses LIKE prefix
-// matching which is index-friendly. When sprintfSafe is true, the
-// trailing '%' in LIKE patterns is doubled to '%%' so the result
-// can be embedded in a fmt.Sprintf template without being parsed
-// as a format verb.
-func SystemPrefixSQL(contentCol, roleCol string, sprintfSafe ...bool) string {
-	pct := "%"
-	if len(sprintfSafe) > 0 && sprintfSafe[0] {
-		pct = "%%"
-	}
+// passed (e.g. "m.content" or "m2.content"). Uses case-sensitive
+// substr comparison, which behaves identically on SQLite and
+// PostgreSQL (unlike LIKE, which is case-insensitive on SQLite).
+func SystemPrefixSQL(contentCol, roleCol string) string {
 	// LTRIM strips the same whitespace as Go's strings.TrimSpace,
 	// JS .trim(), and the parser's isSystem helpers: ASCII whitespace,
 	// BOM (U+FEFF), and Unicode
@@ -51,7 +45,9 @@ func SystemPrefixSQL(contentCol, roleCol string, sprintfSafe ...bool) string {
 		"\u2028\u2029\u202F\u205F\u3000\uFEFF')"
 	parts := make([]string, len(SystemMsgPrefixes))
 	for i, p := range SystemMsgPrefixes {
-		parts[i] = trimmed + " LIKE '" + p + pct + "'"
+		parts[i] = fmt.Sprintf(
+			"substr(%s, 1, %d) = '%s'", trimmed, len(p), p,
+		)
 	}
 	return "NOT (" + roleCol + " = 'user' AND (" +
 		strings.Join(parts, " OR ") + "))"
@@ -122,7 +118,7 @@ func (db *DB) Search(
 		"messages_fts MATCH ?",
 		"s2.deleted_at IS NULL",
 		"m2.is_system = 0",
-		SystemPrefixSQL("m2.content", "m2.role", true),
+		SystemPrefixSQL("m2.content", "m2.role"),
 	}
 	ftsArgs := []any{f.Query} // args for one copy of innerWhere
 
@@ -238,7 +234,7 @@ func (db *DB) Search(
 					SELECT 1 FROM messages mx
 					WHERE mx.session_id = s.id
 					  AND mx.is_system = 0
-					  AND `+SystemPrefixSQL("mx.content", "mx.role", true)+`
+					  AND `+SystemPrefixSQL("mx.content", "mx.role")+`
 				)
 				%s
 				AND s.id NOT IN (
