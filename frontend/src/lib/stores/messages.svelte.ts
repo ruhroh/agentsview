@@ -20,9 +20,7 @@ class MessagesStore {
   hasOlder: boolean = $state(false);
   loadingOlder: boolean = $state(false);
   mainModel: string = $derived(
-    !this.loading && !this.hasOlder
-      ? computeMainModel(this.messages)
-      : "",
+    !this.loading ? computeMainModel(this.messages) : "",
   );
   private abortController: AbortController | null = null;
   private reloadPromise: Promise<void> | null = null;
