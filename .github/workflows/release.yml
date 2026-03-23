@@ -188,3 +188,44 @@ jobs:
             artifacts/SHA256SUMS
           body: ${{ steps.tag_message.outputs.has_body == 'true' && steps.tag_message.outputs.body || '' }}
           generate_release_notes: ${{ steps.tag_message.outputs.has_body != 'true' }}
+
+  pypi:
+    needs: [build, release]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Build wheels
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          python scripts/build_wheels.py \
+            --version "$VERSION" \
+            --input-dir artifacts \
+            --output-dir wheels \
+            --readme README.md
+
+      - name: Smoke test wheel
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          pip install wheels/agentsview-${VERSION}-py3-none-manylinux_2_28_x86_64.whl
+          agentsview --version
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e  # v1.13.0
+        with:
+          packages-dir: wheels/
