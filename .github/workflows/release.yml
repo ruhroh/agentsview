@@ -17,10 +17,12 @@ jobs:
           - os: ubuntu-latest
             goos: linux
             goarch: amd64
+            container: quay.io/pypa/manylinux_2_28_x86_64
           - os: ubuntu-latest
             goos: linux
             goarch: arm64
             cc: aarch64-linux-gnu-gcc
+            container: quay.io/pypa/manylinux_2_28_x86_64
           - os: macos-15
             goos: darwin
             goarch: amd64
@@ -32,6 +34,7 @@ jobs:
             goarch: amd64
 
     runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container || '' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
@@ -57,7 +60,7 @@ jobs:
 
       - name: Install cross-compiler (Linux ARM64)
         if: matrix.goarch == 'arm64' && matrix.goos == 'linux'
-        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+        run: dnf install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
 
       - name: Setup MinGW (Windows)
         if: matrix.goos == 'windows'
@@ -75,6 +78,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "1"
           CC: ${{ matrix.cc || '' }}
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.goos == 'darwin' && '11.0' || '' }}
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
           COMMIT=${GITHUB_SHA::8}
@@ -86,6 +90,32 @@ jobs:
           LDFLAGS="-s -w -X main.version=v${VERSION} -X main.commit=${COMMIT} -X main.buildDate=${BUILD_DATE}"
           go build -tags fts5 -ldflags="$LDFLAGS" -trimpath \
             -o dist/agentsview${EXT} ./cmd/agentsview
+
+          # Smoke test (skip cross-compiled binaries that can't run on host)
+          if [ "$GOOS" = "$(go env GOHOSTOS)" ] && [ "$GOARCH" = "$(go env GOHOSTARCH)" ]; then
+            ./dist/agentsview${EXT} --version
+          fi
+
+          # Verify glibc compatibility (Linux)
+          if [ "$GOOS" = "linux" ]; then
+            MAX_GLIBC="GLIBC_2.28"
+            HIGHEST=$(objdump -T dist/agentsview | grep -oP 'GLIBC_\d+\.\d+' | sort -t. -k1,1n -k2,2n | tail -1)
+            echo "Highest glibc symbol: $HIGHEST (max allowed: $MAX_GLIBC)"
+            if [ "$(printf '%s\n%s' "$MAX_GLIBC" "$HIGHEST" | sort -t. -k1,1n -k2,2n | tail -1)" != "$MAX_GLIBC" ]; then
+              echo "ERROR: Binary requires $HIGHEST but wheel claims $MAX_GLIBC"
+              exit 1
+            fi
+          fi
+
+          # Verify macOS deployment target
+          if [ "$GOOS" = "darwin" ]; then
+            MINOS=$(otool -l dist/agentsview | grep -A3 LC_BUILD_VERSION | grep minos | awk '{print $2}')
+            echo "Minimum macOS version: $MINOS"
+            if [ "$MINOS" != "11.0" ]; then
+              echo "ERROR: Expected minos 11.0, got $MINOS"
+              exit 1
+            fi
+          fi
 
           cd dist
           if [ "$GOOS" = "windows" ]; then
