@@ -622,7 +622,20 @@ fn setup_menu(app: &mut App) -> Result<(), DynError> {
 
     let app_submenu = builder.quit().build()?;
 
-    let menu = MenuBuilder::new(app).item(&app_submenu).build()?;
+    let edit_submenu = SubmenuBuilder::new(app, "Edit")
+        .undo()
+        .redo()
+        .separator()
+        .cut()
+        .copy()
+        .paste()
+        .select_all()
+        .build()?;
+
+    let menu = MenuBuilder::new(app)
+        .item(&app_submenu)
+        .item(&edit_submenu)
+        .build()?;
     app.set_menu(menu)?;
     Ok(())
 }
