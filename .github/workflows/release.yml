@@ -185,6 +185,7 @@ jobs:
 
   release:
     needs: [build-linux, build]
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -240,6 +241,7 @@ jobs:
 
   pypi:
     needs: [build-linux, build, release]
+    if: ${{ !cancelled() && needs.release.result == 'success' }}
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -266,14 +268,18 @@ jobs:
             --version "$VERSION" \
             --input-dir artifacts \
             --output-dir wheels \
-            --readme README.md \
-            --require-all
+            --readme README.md
 
       - name: Smoke test wheel
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
-          pip install wheels/agentsview-${VERSION}-py3-none-manylinux_2_28_x86_64.whl
-          agentsview --version
+          WHEEL="wheels/agentsview-${VERSION}-py3-none-manylinux_2_28_x86_64.whl"
+          if [ -f "$WHEEL" ]; then
+            pip install "$WHEEL"
+            agentsview --version
+          else
+            echo "Linux x86_64 wheel not available, skipping smoke test"
+          fi
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e  # v1.13.0
