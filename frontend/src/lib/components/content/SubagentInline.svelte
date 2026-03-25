@@ -45,12 +45,7 @@
   async function openAsSession(e: MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
-    if (router.route === "sessions") {
-      await sessions.navigateToSession(sessionId);
-    } else {
-      sessions.pendingNavTarget = sessionId;
-      router.navigate("sessions");
-    }
+    router.navigateToSession(sessionId);
   }
 
   let agentLabel = $derived(sessionMeta?.agent ?? null);
@@ -88,7 +83,7 @@
       {/if}
     </button>
     <a
-      href="#{sessionId}"
+      href={router.buildSessionHref(sessionId)}
       class="open-session-link"
       onclick={openAsSession}
       title="Open as full session"

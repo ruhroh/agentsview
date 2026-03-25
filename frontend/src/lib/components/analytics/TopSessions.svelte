@@ -17,15 +17,11 @@
   }
 
   function handleSessionClick(id: string) {
-    const params: Record<string, string> = {};
-    if (analytics.includeOneShot) {
-      params["include_one_shot"] = "true";
+    if (analytics.includeOneShot && !sessions.filters.includeOneShot) {
+      sessions.filters.includeOneShot = true;
+      sessions.invalidateFilterCaches();
     }
-    sessions.pendingNavTarget = id;
-    if (!router.navigate("sessions", params)) {
-      sessions.pendingNavTarget = null;
-      sessions.selectSession(id);
-    }
+    router.navigateToSession(id);
   }
 </script>
 

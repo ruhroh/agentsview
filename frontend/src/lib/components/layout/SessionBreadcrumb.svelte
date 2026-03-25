@@ -12,6 +12,7 @@
   import { agentColor } from "../../utils/agents.js";
   import { formatTokenCount } from "../../utils/format.js";
   import { sessions } from "../../stores/sessions.svelte.js";
+  import { router } from "../../stores/router.svelte.js";
   import {
     supportsResume,
     buildResumeCommand,
@@ -81,6 +82,23 @@
     }, 1500);
   }
 
+
+  let copiedLinkId = $state("");
+  let copiedLinkTimer: ReturnType<typeof setTimeout> | undefined;
+
+  async function copySessionLink() {
+    if (!session) return;
+    const id = session.id;
+    const href = router.buildSessionHref(id);
+    const url = window.location.origin + href;
+    const ok = await copyToClipboard(url);
+    if (!ok) return;
+    copiedLinkId = id;
+    clearTimeout(copiedLinkTimer);
+    copiedLinkTimer = setTimeout(() => {
+      if (copiedLinkId === id) copiedLinkId = "";
+    }, 1500);
+  }
 
   function toggleMenu() {
     menuOpen = !menuOpen;
@@ -459,6 +477,24 @@
       {/if}
       <div class="actions-wrapper">
         <button
+          class="link-btn"
+          class:link-btn--copied={copiedLinkId === session?.id}
+          title="Copy link to session"
+          onclick={copySessionLink}
+          aria-label="Copy link to session"
+        >
+          {#if copiedLinkId === session?.id}
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z"/>
+            </svg>
+          {:else}
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M4.715 6.542L3.343 7.914a3 3 0 104.243 4.243l1.828-1.829A3 3 0 008.586 5.5L8 6.086a1.002 1.002 0 00-.154.199 2 2 0 01.861 3.337L6.88 11.45a2 2 0 11-2.83-2.83l.793-.792a4.018 4.018 0 01-.128-1.287z"/>
+              <path d="M11.285 9.458l1.372-1.372a3 3 0 10-4.243-4.243L6.586 5.671A3 3 0 007.414 10.5l.586-.586a1.002 1.002 0 00.154-.199 2 2 0 01-.861-3.337L9.12 4.55a2 2 0 112.83 2.83l-.793.792c.112.42.155.855.128 1.287z"/>
+            </svg>
+          {/if}
+        </button>
+        <button
           class="find-btn"
           class:find-btn--active={inSessionSearch.isOpen}
           title="Find in session (/)"
@@ -728,6 +764,30 @@
     display: flex;
     align-items: center;
     gap: 2px;
+  }
+
+  .link-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border: none;
+    border-radius: var(--radius-sm, 4px);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    flex-shrink: 0;
+  }
+
+  .link-btn:hover {
+    background: var(--bg-surface-hover);
+    color: var(--accent-blue);
+  }
+
+  .link-btn--copied {
+    color: var(--accent-green, #2ea043);
   }
 
   .find-btn {

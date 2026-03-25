@@ -1,9 +1,29 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeEach,
+  afterEach,
+} from "vitest";
 import { mount, unmount, tick } from "svelte";
 // @ts-ignore
 import SessionBreadcrumb from "./SessionBreadcrumb.svelte";
 import type { Session } from "../../api/types.js";
+
+vi.mock("../../api/client.js", () => ({
+  listOpeners: vi.fn().mockResolvedValue({ openers: [] }),
+  getSessionDirectory: vi
+    .fn()
+    .mockResolvedValue({ path: "" }),
+  resumeSession: vi.fn(),
+  openSession: vi.fn(),
+}));
+
+vi.mock("../../utils/clipboard.js", () => ({
+  copyToClipboard: vi.fn().mockResolvedValue(true),
+}));
 
 function makeSession(agent: string): Session {
   return {
@@ -58,5 +78,66 @@ describe("SessionBreadcrumb", () => {
     );
 
     unmount(component);
+  });
+
+  describe("copy-link timer", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("restarts timer on rapid re-copy", async () => {
+      const component = mount(SessionBreadcrumb, {
+        target: document.body,
+        props: {
+          session: makeSession("claude"),
+          onBack: () => {},
+        },
+      });
+      await tick();
+
+      const linkBtn = document.querySelector(".link-btn");
+      expect(linkBtn).toBeTruthy();
+
+      // First copy
+      linkBtn!.dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+      await tick();
+      await vi.advanceTimersByTimeAsync(0);
+      await tick();
+      expect(
+        linkBtn!.classList.contains("link-btn--copied"),
+      ).toBe(true);
+
+      // Advance 1s, then copy again
+      await vi.advanceTimersByTimeAsync(1000);
+      linkBtn!.dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+      await tick();
+      await vi.advanceTimersByTimeAsync(0);
+      await tick();
+
+      // 600ms after second click — first timer's 1.5s
+      // would have expired, but it was cleared
+      await vi.advanceTimersByTimeAsync(600);
+      await tick();
+      expect(
+        linkBtn!.classList.contains("link-btn--copied"),
+      ).toBe(true);
+
+      // After full 1.5s from second click, state clears
+      await vi.advanceTimersByTimeAsync(900);
+      await tick();
+      expect(
+        linkBtn!.classList.contains("link-btn--copied"),
+      ).toBe(false);
+
+      unmount(component);
+    });
   });
 });
