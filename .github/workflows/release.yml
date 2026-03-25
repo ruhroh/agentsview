@@ -59,7 +59,7 @@ jobs:
 
           mkdir -p dist
           LDFLAGS="-s -w -X main.version=v${VERSION} -X main.commit=${COMMIT} -X main.buildDate=${BUILD_DATE}"
-          go build -tags fts5 -ldflags="$LDFLAGS" -trimpath \
+          go build -tags fts5 -buildvcs=false -ldflags="$LDFLAGS" -trimpath \
             -o dist/agentsview ./cmd/agentsview
 
           # Smoke test (native builds — no cross-compilation)
