@@ -185,7 +185,6 @@ jobs:
 
   release:
     needs: [build-linux, build]
-    if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -241,7 +240,6 @@ jobs:
 
   pypi:
     needs: [build-linux, build, release]
-    if: ${{ !cancelled() && needs.release.result == 'success' && needs.build-linux.result == 'success' }}
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
