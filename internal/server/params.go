@@ -3,7 +3,9 @@ package server
 import (
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
+	"time"
 )
 
 // parseIntParam reads an integer query parameter from r.
@@ -24,6 +26,19 @@ func parseIntParam(
 		return 0, false
 	}
 	return v, true
+}
+
+var dateRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
+
+// isValidDate checks if s is a YYYY-MM-DD date string.
+func isValidDate(s string) bool {
+	return dateRe.MatchString(s)
+}
+
+// isValidTimestamp checks if s is a valid RFC3339 timestamp.
+func isValidTimestamp(s string) bool {
+	_, err := time.Parse(time.RFC3339, s)
+	return err == nil
 }
 
 // clampLimit applies a default and upper bound to a limit value.

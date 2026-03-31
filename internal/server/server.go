@@ -16,8 +16,6 @@ import (
 
 	"github.com/wesm/agentsview/internal/config"
 	"github.com/wesm/agentsview/internal/db"
-	"github.com/wesm/agentsview/internal/insight"
-	"github.com/wesm/agentsview/internal/sync"
 	"github.com/wesm/agentsview/internal/web"
 )
 
@@ -34,7 +32,6 @@ type Server struct {
 	mu      gosync.RWMutex
 	cfg     config.Config
 	db      db.Store
-	engine  *sync.Engine
 	mux     *http.ServeMux
 	httpSrv *http.Server
 	version VersionInfo
@@ -45,19 +42,13 @@ type Server struct {
 	// exit promptly, which unblocks graceful shutdown.
 	baseCtx context.Context
 
-	generateStreamFunc insight.GenerateStreamFunc
-	spaFS              fs.FS
-	spaHandler         http.Handler
+	spaFS      fs.FS
+	spaHandler http.Handler
 
 	// handlerDelay is injected before each timeout-wrapped
 	// handler, used only by tests to guarantee handlers
 	// exceed a short timeout. Zero in production.
 	handlerDelay time.Duration
-
-	// updateCheckFn is the function called to check for
-	// updates. Defaults to update.CheckForUpdate; tests
-	// can override it via WithUpdateChecker.
-	updateCheckFn UpdateCheckFunc
 
 	// basePath is a URL prefix for reverse-proxy deployments
 	// (e.g. "/agentsview"). When set, all routes are served
@@ -68,7 +59,7 @@ type Server struct {
 
 // New creates a new Server.
 func New(
-	cfg config.Config, database db.Store, engine *sync.Engine,
+	cfg config.Config, database db.Store,
 	opts ...Option,
 ) *Server {
 	dist, err := web.Assets()
@@ -77,13 +68,11 @@ func New(
 	}
 
 	s := &Server{
-		cfg:                cfg,
-		db:                 database,
-		engine:             engine,
-		mux:                http.NewServeMux(),
-		generateStreamFunc: insight.GenerateStream,
-		spaFS:              dist,
-		spaHandler:         http.FileServerFS(dist),
+		cfg:        cfg,
+		db:         database,
+		mux:        http.NewServeMux(),
+		spaFS:      dist,
+		spaHandler: http.FileServerFS(dist),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -113,12 +102,6 @@ func WithBaseContext(ctx context.Context) Option {
 	return func(s *Server) { s.baseCtx = ctx }
 }
 
-// WithUpdateChecker overrides the update check function,
-// allowing tests to substitute a deterministic stub.
-func WithUpdateChecker(f UpdateCheckFunc) Option {
-	return func(s *Server) { s.updateCheckFn = f }
-}
-
 // WithBasePath sets a URL prefix for reverse-proxy deployments.
 // The path must start with "/" and not end with "/" (e.g.
 // "/agentsview"). When set, the server strips this prefix from
@@ -129,122 +112,40 @@ func WithBasePath(path string) Option {
 	}
 }
 
-// WithGenerateFunc overrides the insight generation function,
-// allowing tests to substitute a stub. Nil is ignored.
-func WithGenerateFunc(f insight.GenerateFunc) Option {
-	return func(s *Server) {
-		if f != nil {
-			s.generateStreamFunc = func(
-				ctx context.Context, agent, prompt string,
-				_ insight.LogFunc,
-			) (insight.Result, error) {
-				return f(ctx, agent, prompt)
-			}
-		}
-	}
-}
-
-// WithGenerateStreamFunc overrides the streaming insight
-// generation function used by the SSE handler. Nil is ignored.
-func WithGenerateStreamFunc(f insight.GenerateStreamFunc) Option {
-	return func(s *Server) {
-		if f != nil {
-			s.generateStreamFunc = f
-		}
-	}
-}
-
 func (s *Server) routes() {
-	// API v1 routes
+	// Session browsing
 	s.mux.Handle("GET /api/v1/sessions", s.withTimeout(s.handleListSessions))
 	s.mux.Handle("GET /api/v1/sessions/{id}", s.withTimeout(s.handleGetSession))
-	s.mux.Handle(
-		"GET /api/v1/sessions/{id}/messages", s.withTimeout(s.handleGetMessages),
-	)
-	s.mux.Handle(
-		"GET /api/v1/sessions/{id}/children", s.withTimeout(s.handleGetChildSessions),
-	)
-	s.mux.Handle(
-		"GET /api/v1/sessions/{id}/activity", s.withTimeout(s.handleGetSessionActivity),
-	)
-	// SSE: Do not use timeout, as this is a long-lived connection.
-	s.mux.HandleFunc(
-		"GET /api/v1/sessions/{id}/watch", s.handleWatchSession,
-	)
-	// Export: Do not use timeout handler to support large downloads and avoid buffering.
-	s.mux.Handle(
-		"GET /api/v1/sessions/{id}/export", http.HandlerFunc(s.handleExportSession),
-	)
-	s.mux.Handle(
-		"POST /api/v1/sessions/{id}/publish", s.withTimeout(s.handlePublishSession),
-	)
-	s.mux.Handle(
-		"POST /api/v1/sessions/{id}/resume", s.withTimeout(s.handleResumeSession),
-	)
-	s.mux.Handle("GET /api/v1/openers", s.withTimeout(s.handleListOpeners))
-	s.mux.Handle("GET /api/v1/sessions/{id}/directory", s.withTimeout(s.handleGetSessionDir))
+	s.mux.Handle("GET /api/v1/sessions/{id}/messages", s.withTimeout(s.handleGetMessages))
+	s.mux.Handle("GET /api/v1/sessions/{id}/children", s.withTimeout(s.handleGetChildSessions))
 	s.mux.Handle("GET /api/v1/sessions/{id}/search", s.withTimeout(s.handleSearchSession))
-	s.mux.Handle("POST /api/v1/sessions/{id}/open", s.withTimeout(s.handleOpenSession))
-	s.mux.Handle(
-		"POST /api/v1/sessions/upload", s.withTimeout(s.handleUploadSession),
-	)
-	s.mux.Handle("GET /api/v1/analytics/summary", s.withTimeout(s.handleAnalyticsSummary))
-	s.mux.Handle("GET /api/v1/analytics/activity", s.withTimeout(s.handleAnalyticsActivity))
-	s.mux.Handle("GET /api/v1/analytics/heatmap", s.withTimeout(s.handleAnalyticsHeatmap))
-	s.mux.Handle("GET /api/v1/analytics/projects", s.withTimeout(s.handleAnalyticsProjects))
-	s.mux.Handle("GET /api/v1/analytics/hour-of-week", s.withTimeout(s.handleAnalyticsHourOfWeek))
-	s.mux.Handle("GET /api/v1/analytics/sessions", s.withTimeout(s.handleAnalyticsSessionShape))
-	s.mux.Handle("GET /api/v1/analytics/velocity", s.withTimeout(s.handleAnalyticsVelocity))
-	s.mux.Handle("GET /api/v1/analytics/tools", s.withTimeout(s.handleAnalyticsTools))
-	s.mux.Handle("GET /api/v1/analytics/top-sessions", s.withTimeout(s.handleAnalyticsTopSessions))
 
-	s.mux.Handle("GET /api/v1/insights", s.withTimeout(s.handleListInsights))
-	s.mux.Handle("GET /api/v1/insights/{id}", s.withTimeout(s.handleGetInsight))
-	s.mux.Handle("DELETE /api/v1/insights/{id}", s.withTimeout(s.handleDeleteInsight))
-	s.mux.HandleFunc("POST /api/v1/insights/generate", s.handleGenerateInsight)
-
+	// Search
 	s.mux.Handle("GET /api/v1/search", s.withTimeout(s.handleSearch))
+
+	// Metadata
 	s.mux.Handle("GET /api/v1/projects", s.withTimeout(s.handleListProjects))
 	s.mux.Handle("GET /api/v1/machines", s.withTimeout(s.handleListMachines))
 	s.mux.Handle("GET /api/v1/agents", s.withTimeout(s.handleListAgents))
 	s.mux.Handle("GET /api/v1/stats", s.withTimeout(s.handleGetStats))
 	s.mux.Handle("GET /api/v1/version", s.withTimeout(s.handleGetVersion))
-	s.mux.HandleFunc("POST /api/v1/sync", s.handleTriggerSync)
-	s.mux.HandleFunc("POST /api/v1/resync", s.handleTriggerResync)
-	s.mux.Handle("GET /api/v1/sync/status", s.withTimeout(s.handleSyncStatus))
-	s.mux.Handle("GET /api/v1/config/github", s.withTimeout(s.handleGetGithubConfig))
-	s.mux.Handle(
-		"POST /api/v1/config/github", s.withTimeout(s.handleSetGithubConfig),
-	)
-	s.mux.Handle("GET /api/v1/config/terminal", s.withTimeout(s.handleGetTerminalConfig))
-	s.mux.Handle(
-		"POST /api/v1/config/terminal", s.withTimeout(s.handleSetTerminalConfig),
-	)
-	s.mux.Handle("GET /api/v1/update/check", s.withTimeout(s.handleCheckUpdate))
 
-	s.mux.Handle("GET /api/v1/settings", s.withTimeout(s.handleGetSettings))
-	s.mux.Handle("PUT /api/v1/settings", s.withTimeout(s.handleUpdateSettings))
-
+	// Stars
 	s.mux.Handle("GET /api/v1/starred", s.withTimeout(s.handleListStarred))
 	s.mux.Handle("PUT /api/v1/sessions/{id}/star", s.withTimeout(s.handleStarSession))
 	s.mux.Handle("DELETE /api/v1/sessions/{id}/star", s.withTimeout(s.handleUnstarSession))
 	s.mux.Handle("POST /api/v1/starred/bulk", s.withTimeout(s.handleBulkStar))
 
-	// Session management
-	s.mux.Handle("PATCH /api/v1/sessions/{id}/rename", s.withTimeout(s.handleRenameSession))
-	s.mux.Handle("DELETE /api/v1/sessions/{id}", s.withTimeout(s.handleDeleteSession))
-	s.mux.Handle("POST /api/v1/sessions/{id}/restore", s.withTimeout(s.handleRestoreSession))
-	s.mux.Handle("DELETE /api/v1/sessions/{id}/permanent", s.withTimeout(s.handlePermanentDeleteSession))
-	s.mux.Handle("GET /api/v1/trash", s.withTimeout(s.handleListTrash))
-	s.mux.Handle("DELETE /api/v1/trash", s.withTimeout(s.handleEmptyTrash))
+	// Shares (local client endpoints)
+	s.mux.Handle("GET /api/v1/shared", s.withTimeout(s.handleListShared))
+	s.mux.Handle("PUT /api/v1/sessions/{id}/share", s.withTimeout(s.handleShareSession))
+	s.mux.Handle("DELETE /api/v1/sessions/{id}/share", s.withTimeout(s.handleUnshareSession))
 
-	// Pinned messages
-	s.mux.Handle("GET /api/v1/pins", s.withTimeout(s.handleListPins))
-	s.mux.Handle("GET /api/v1/sessions/{id}/pins", s.withTimeout(s.handleListSessionPins))
-	s.mux.Handle("POST /api/v1/sessions/{id}/messages/{messageId}/pin", s.withTimeout(s.handlePinMessage))
-	s.mux.Handle("DELETE /api/v1/sessions/{id}/messages/{messageId}/pin", s.withTimeout(s.handleUnpinMessage))
-	// SPA fallback: serve embedded frontend
-	// Do not use timeout handler for static assets to avoid buffering.
+	// Share write endpoints (token-protected, used by local instances pushing shares)
+	s.mux.Handle("PUT /api/v1/shares/{shareId}", s.withTimeout(s.handleUpsertShare))
+	s.mux.Handle("DELETE /api/v1/shares/{shareId}", s.withTimeout(s.handleDeleteShare))
+
+	// SPA fallback
 	s.mux.Handle("/", http.HandlerFunc(s.handleSPA))
 }
 
@@ -328,20 +229,6 @@ func (s *Server) SetPort(port int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cfg.Port = port
-}
-
-// SetGithubToken updates the GitHub token for testing.
-func (s *Server) SetGithubToken(token string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.cfg.GithubToken = token
-}
-
-// githubToken returns the current GitHub token (thread-safe).
-func (s *Server) githubToken() string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.cfg.GithubToken
 }
 
 // Handler returns the http.Handler with middleware applied.

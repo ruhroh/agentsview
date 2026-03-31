@@ -62,6 +62,13 @@ type PGConfig struct {
 	AllowInsecure bool   `toml:"allow_insecure" json:"allow_insecure"`
 }
 
+// ShareConfig holds settings for publishing sessions to a hosted server.
+type ShareConfig struct {
+	URL       string `toml:"url" json:"url"`
+	Token     string `toml:"token" json:"token"`
+	Publisher string `toml:"publisher" json:"publisher"`
+}
+
 // Config holds all application configuration.
 type Config struct {
 	Host                 string         `json:"host" toml:"host"`
@@ -79,6 +86,7 @@ type Config struct {
 	RemoteAccess         bool           `json:"remote_access" toml:"remote_access"`
 	NoBrowser            bool           `json:"no_browser" toml:"no_browser"`
 	PG                   PGConfig       `json:"pg,omitempty" toml:"pg"`
+	Share                ShareConfig    `json:"share,omitempty" toml:"share"`
 	WriteTimeout         time.Duration  `json:"-" toml:"-"`
 
 	// AgentDirs maps each AgentType to its configured
@@ -299,6 +307,7 @@ func (c *Config) loadFile() error {
 		AuthToken                      string         `toml:"auth_token"`
 		RemoteAccess                   bool           `toml:"remote_access"`
 		PG                             PGConfig       `toml:"pg"`
+		Share                          ShareConfig    `toml:"share"`
 	}
 	if _, err := toml.DecodeFile(path, &file); err != nil {
 		return fmt.Errorf("parsing config: %w", err)
@@ -347,6 +356,17 @@ func (c *Config) loadFile() error {
 	}
 	if file.PG.AllowInsecure {
 		c.PG.AllowInsecure = true
+	}
+	// Merge share config field-by-field so env vars override
+	// only the fields they set, preserving config-file settings.
+	if file.Share.URL != "" && c.Share.URL == "" {
+		c.Share.URL = file.Share.URL
+	}
+	if file.Share.Token != "" && c.Share.Token == "" {
+		c.Share.Token = file.Share.Token
+	}
+	if file.Share.Publisher != "" && c.Share.Publisher == "" {
+		c.Share.Publisher = file.Share.Publisher
 	}
 
 	// Parse config-file dir arrays for agents that have a
@@ -467,6 +487,15 @@ func (c *Config) loadEnv() {
 	}
 	if v := os.Getenv("AGENTSVIEW_PG_MACHINE"); v != "" {
 		c.PG.MachineName = v
+	}
+	if v := os.Getenv("AGENTSVIEW_SHARE_URL"); v != "" {
+		c.Share.URL = v
+	}
+	if v := os.Getenv("AGENTSVIEW_SHARE_TOKEN"); v != "" {
+		c.Share.Token = v
+	}
+	if v := os.Getenv("AGENTSVIEW_SHARE_PUBLISHER"); v != "" {
+		c.Share.Publisher = v
 	}
 }
 

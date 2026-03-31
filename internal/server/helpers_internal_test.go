@@ -14,8 +14,6 @@ import (
 
 	"github.com/wesm/agentsview/internal/config"
 	"github.com/wesm/agentsview/internal/db"
-	"github.com/wesm/agentsview/internal/parser"
-	"github.com/wesm/agentsview/internal/sync"
 )
 
 // testServer creates a Server for internal tests with the given
@@ -41,13 +39,7 @@ func testServer(
 		DBPath:       dbPath,
 		WriteTimeout: writeTimeout,
 	}
-	engine := sync.NewEngine(database, sync.EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentClaude: {dir},
-		},
-		Machine: "test",
-	})
-	return New(cfg, database, engine, opts...)
+	return New(cfg, database, opts...)
 }
 
 // withHandlerDelay injects a sleep before each timeout-wrapped

@@ -2,6 +2,7 @@
   import type { Session } from "../../api/types.js";
   import { sessions, isRecentlyActive } from "../../stores/sessions.svelte.js";
   import { starred } from "../../stores/starred.svelte.js";
+  import { shared } from "../../stores/shared.svelte.js";
   import { formatRelativeTime, truncate } from "../../utils/format.js";
   import { agentColor as getAgentColor } from "../../utils/agents.js";
 
@@ -105,6 +106,7 @@
   );
 
   let isStarred = $derived(starred.isStarred(session.id));
+  let isShared = $derived(shared.isShared(session.id));
 
   let childCount = $derived(
     continuationCount > 1 ? continuationCount - 1 : 0,
@@ -120,6 +122,11 @@
   function handleStar(e: MouseEvent) {
     e.stopPropagation();
     starred.toggle(session.id);
+  }
+
+  function handleShare(e: MouseEvent) {
+    e.stopPropagation();
+    shared.toggle(session.id);
   }
 
   function handleToggle(e: MouseEvent) {
@@ -313,6 +320,23 @@
   </div>
 
   {#if !compact}
+    <button
+      class="share-btn"
+      class:shared={isShared}
+      onclick={handleShare}
+      title={isShared ? "Unshare session" : "Share session"}
+      aria-label={isShared ? "Unshare session" : "Share session"}
+    >
+      {#if isShared}
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <path d="M13.5 3a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zM15 3a3 3 0 01-5.133 2.107L6.14 7.234a3 3 0 010 1.532l3.727 2.127A3 3 0 1113 13a2.99 2.99 0 00-1.133-2.34L8.14 8.533a3.01 3.01 0 000-1.066l3.727-2.127A3 3 0 0015 3zM5.5 8a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zM13.5 13a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z"/>
+        </svg>
+      {:else}
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true">
+          <path d="M13.5 3a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zM15 3a3 3 0 01-5.133 2.107L6.14 7.234a3 3 0 010 1.532l3.727 2.127A3 3 0 1113 13a2.99 2.99 0 00-1.133-2.34L8.14 8.533a3.01 3.01 0 000-1.066l3.727-2.127A3 3 0 0015 3zM5.5 8a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zM13.5 13a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z"/>
+        </svg>
+      {/if}
+    </button>
     <button
       class="star-btn"
       class:starred={isStarred}
@@ -613,6 +637,40 @@
 
   .star-btn.starred:hover {
     color: var(--accent-amber);
+    background: var(--bg-surface-hover);
+  }
+
+  .share-btn {
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    flex-shrink: 0;
+    opacity: 0;
+    transition: opacity 0.12s, color 0.12s, background 0.12s;
+  }
+
+  .session-item:hover .share-btn,
+  .session-item:focus-within .share-btn,
+  .share-btn:focus-visible,
+  .share-btn.shared {
+    opacity: 1;
+  }
+
+  .share-btn:hover {
+    background: var(--bg-surface-hover);
+    color: var(--text-secondary);
+  }
+
+  .share-btn.shared {
+    color: var(--accent-blue);
+  }
+
+  .share-btn.shared:hover {
+    color: var(--accent-blue);
     background: var(--bg-surface-hover);
   }
 

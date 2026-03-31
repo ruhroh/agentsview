@@ -3,23 +3,13 @@
   import AppHeader from "./lib/components/layout/AppHeader.svelte";
   import ThreeColumnLayout from "./lib/components/layout/ThreeColumnLayout.svelte";
   import SessionBreadcrumb from "./lib/components/layout/SessionBreadcrumb.svelte";
-  import StatusBar from "./lib/components/layout/StatusBar.svelte";
   import SessionList from "./lib/components/sidebar/SessionList.svelte";
   import MessageList from "./lib/components/content/MessageList.svelte";
-  import ActivityMinimap from "./lib/components/content/ActivityMinimap.svelte";
   import { sessionActivity } from "./lib/stores/sessionActivity.svelte.js";
   import CommandPalette from "./lib/components/command-palette/CommandPalette.svelte";
   import AboutModal from "./lib/components/modals/AboutModal.svelte";
   import ShortcutsModal from "./lib/components/modals/ShortcutsModal.svelte";
-  import PublishModal from "./lib/components/modals/PublishModal.svelte";
-  import ResyncModal from "./lib/components/modals/ResyncModal.svelte";
-  import UpdateModal from "./lib/components/modals/UpdateModal.svelte";
   import ConfirmDeleteModal from "./lib/components/modals/ConfirmDeleteModal.svelte";
-  import AnalyticsPage from "./lib/components/analytics/AnalyticsPage.svelte";
-  import InsightsPage from "./lib/components/insights/InsightsPage.svelte";
-  import PinnedPage from "./lib/components/pinned/PinnedPage.svelte";
-  import TrashPage from "./lib/components/trash/TrashPage.svelte";
-  import SettingsPage from "./lib/components/settings/SettingsPage.svelte";
   import { sessions } from "./lib/stores/sessions.svelte.js";
   import { messages } from "./lib/stores/messages.svelte.js";
   import { sync } from "./lib/stores/sync.svelte.js";
@@ -359,24 +349,7 @@
 
 <AppHeader />
 
-{#if router.route === "insights"}
-  <div class="page-scroll">
-    <InsightsPage />
-  </div>
-{:else if router.route === "pinned"}
-  <div class="page-scroll">
-    <PinnedPage />
-  </div>
-{:else if router.route === "trash"}
-  <div class="page-scroll">
-    <TrashPage />
-  </div>
-{:else if router.route === "settings"}
-  <div class="page-scroll">
-    <SettingsPage />
-  </div>
-{:else}
-  <ThreeColumnLayout>
+<ThreeColumnLayout>
     {#snippet sidebar()}
       <SessionList />
     {/snippet}
@@ -388,20 +361,10 @@
           session={session}
           onBack={() => sessions.deselectSession()}
         />
-        {#if ui.activityMinimapOpen && sessions.activeSessionId}
-          <ActivityMinimap
-            sessionId={sessions.activeSessionId}
-          />
-        {/if}
         <MessageList bind:this={messageListRef} />
-      {:else}
-        <AnalyticsPage />
       {/if}
     {/snippet}
   </ThreeColumnLayout>
-{/if}
-
-<StatusBar />
 
 {#if ui.activeModal === "about"}
   <AboutModal />
@@ -415,17 +378,6 @@
   <ShortcutsModal />
 {/if}
 
-{#if ui.activeModal === "publish"}
-  <PublishModal />
-{/if}
-
-{#if ui.activeModal === "resync"}
-  <ResyncModal />
-{/if}
-
-{#if ui.activeModal === "update"}
-  <UpdateModal />
-{/if}
 
 {#if ui.activeModal === "confirmDelete"}
   <ConfirmDeleteModal />
@@ -459,12 +411,6 @@
 {/if}
 
 <style>
-  .page-scroll {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-  }
-
   .undo-toast {
     position: fixed;
     bottom: 40px;

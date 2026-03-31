@@ -1,38 +1,26 @@
 package server_test
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strings"
-	stdlibsync "sync"
 	"testing"
 	"time"
 
 	"github.com/wesm/agentsview/internal/config"
 	"github.com/wesm/agentsview/internal/db"
 	"github.com/wesm/agentsview/internal/dbtest"
-	"github.com/wesm/agentsview/internal/parser"
 	"github.com/wesm/agentsview/internal/server"
-	"github.com/wesm/agentsview/internal/sync"
-	"github.com/wesm/agentsview/internal/testjsonl"
 )
 
 // Timestamp constants for test data.
 const (
-	tsZero    = "2024-01-01T00:00:00Z"
-	tsZeroS5  = "2024-01-01T00:00:05Z"
-	tsEarly   = "2024-01-01T10:00:00Z"
-	tsEarlyS5 = "2024-01-01T10:00:05Z"
 	tsSeed    = "2025-01-15T10:00:00Z"
 	tsSeedEnd = "2025-01-15T11:00:00Z"
 )
@@ -41,12 +29,10 @@ const (
 
 // testEnv sets up a server with a temporary database.
 type testEnv struct {
-	srv       *server.Server
-	handler   http.Handler
-	db        *db.DB
-	engine    *sync.Engine
-	claudeDir string
-	dataDir   string
+	srv     *server.Server
+	handler http.Handler
+	db      *db.DB
+	dataDir string
 }
 
 // setupOption customizes the config used by setup.
@@ -88,15 +74,6 @@ func setupWithServerOpts(
 	}
 	t.Cleanup(func() { database.Close() })
 
-	claudeDir := filepath.Join(dir, "claude")
-	codexDir := filepath.Join(dir, "codex")
-	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
-		t.Fatalf("creating claude dir: %v", err)
-	}
-	if err := os.MkdirAll(codexDir, 0o755); err != nil {
-		t.Fatalf("creating codex dir: %v", err)
-	}
-
 	cfg := config.Config{
 		Host:         "127.0.0.1",
 		Port:         0,
@@ -107,14 +84,7 @@ func setupWithServerOpts(
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	engine := sync.NewEngine(database, sync.EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentClaude: {claudeDir},
-			parser.AgentCodex:  {codexDir},
-		},
-		Machine: "test",
-	})
-	srv := server.New(cfg, database, engine, srvOpts...)
+	srv := server.New(cfg, database, srvOpts...)
 
 	// Wrap handler to set default Host header for all test
 	// requests, matching the test config (127.0.0.1:0).
@@ -149,33 +119,11 @@ func setupWithServerOpts(
 	})
 
 	return &testEnv{
-		srv:       srv,
-		handler:   wrappedHandler,
-		db:        database,
-		engine:    engine,
-		claudeDir: claudeDir,
-		dataDir:   dir,
+		srv:     srv,
+		handler: wrappedHandler,
+		db:      database,
+		dataDir: dir,
 	}
-}
-
-func (te *testEnv) writeProjectFile(
-	t *testing.T, project, filename, content string,
-) string {
-	t.Helper()
-	path := filepath.Join(te.claudeDir, project, filename)
-	dbtest.WriteTestFile(t, path, []byte(content))
-	return path
-}
-
-// writeSessionFile builds JSONL from a SessionBuilder and writes it
-// as a project file, returning the file path.
-func (te *testEnv) writeSessionFile(
-	t *testing.T,
-	project, filename string,
-	b *testjsonl.SessionBuilder,
-) string {
-	t.Helper()
-	return te.writeProjectFile(t, project, filename, b.String())
 }
 
 func waitForPort(port int, timeout time.Duration) error {
@@ -387,33 +335,6 @@ func (te *testEnv) del(
 	return w
 }
 
-// uploadFile creates a multipart upload request.
-func (te *testEnv) upload(
-	t *testing.T, filename, content, query string,
-) *httptest.ResponseRecorder {
-	t.Helper()
-	var buf bytes.Buffer
-	mw := multipart.NewWriter(&buf)
-	fw, err := mw.CreateFormFile("file", filename)
-	if err != nil {
-		t.Fatalf("creating form file: %v", err)
-	}
-	if _, err := fw.Write([]byte(content)); err != nil {
-		t.Fatalf("writing form file: %v", err)
-	}
-	if err := mw.Close(); err != nil {
-		t.Fatalf("closing multipart writer: %v", err)
-	}
-
-	req := httptest.NewRequest(http.MethodPost,
-		"/api/v1/sessions/upload?"+query, &buf)
-	req.Header.Set("Content-Type", mw.FormDataContentType())
-	req.Header.Set("Origin", "http://127.0.0.1:0")
-	w := httptest.NewRecorder()
-	te.handler.ServeHTTP(w, req)
-	return w
-}
-
 // decode unmarshals the response body into a typed struct.
 func decode[T any](
 	t *testing.T, w *httptest.ResponseRecorder,
@@ -500,61 +421,6 @@ func expiredContext(
 	)
 }
 
-type SSEEvent struct {
-	Event string
-	Data  string
-}
-
-func parseSSE(body string) []SSEEvent {
-	var events []SSEEvent
-	scanner := bufio.NewScanner(strings.NewReader(body))
-	var currentEvent SSEEvent
-	hasData := false
-	for scanner.Scan() {
-		line := scanner.Text()
-		if ev, ok := strings.CutPrefix(line, "event: "); ok {
-			currentEvent.Event = ev
-		} else if data, ok := strings.CutPrefix(line, "data: "); ok {
-			if hasData {
-				currentEvent.Data += "\n" + data
-			} else {
-				currentEvent.Data = data
-				hasData = true
-			}
-		} else if line == "" {
-			if currentEvent.Event != "" || hasData {
-				events = append(events, currentEvent)
-				currentEvent = SSEEvent{}
-				hasData = false
-			}
-		} else if hasData {
-			currentEvent.Data += "\n" + line
-		}
-	}
-	if currentEvent.Event != "" || hasData {
-		events = append(events, currentEvent)
-	}
-	return events
-}
-
-func (te *testEnv) waitForSSEEvent(t *testing.T, w *flushRecorder, expectedEvent string, timeout time.Duration) {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
-
-	for time.Now().Before(deadline) {
-		<-ticker.C
-		events := parseSSE(w.BodyString())
-		for _, e := range events {
-			if e.Event == expectedEvent {
-				return
-			}
-		}
-	}
-	t.Fatalf("timed out waiting for event: %s, got: %s", expectedEvent, w.BodyString())
-}
-
 // --- Typed response structs for JSON decoding ---
 
 type sessionListResponse struct {
@@ -577,29 +443,8 @@ type projectListResponse struct {
 	Projects []db.ProjectInfo `json:"projects"`
 }
 
-type syncStatusResponse struct {
-	LastSync string `json:"last_sync"`
-}
-
-type githubConfigResponse struct {
-	Configured bool `json:"configured"`
-}
-
-type uploadResponse struct {
-	SessionID string `json:"session_id"`
-	Project   string `json:"project"`
-	Machine   string `json:"machine"`
-	Messages  int    `json:"messages"`
-}
-
 type machineListResponse struct {
 	Machines []string `json:"machines"`
-}
-
-type syncResultResponse struct {
-	TotalSessions int `json:"total_sessions"`
-	Synced        int `json:"synced"`
-	Skipped       int `json:"skipped"`
 }
 
 // --- Tests ---
@@ -1258,22 +1103,6 @@ func TestListProjects(t *testing.T) {
 	}
 }
 
-func TestSyncStatus(t *testing.T) {
-	te := setup(t)
-
-	// Trigger a sync so LastSync is set
-	w := te.post(t, "/api/v1/sync", "{}")
-	assertStatus(t, w, http.StatusOK)
-
-	w = te.get(t, "/api/v1/sync/status")
-	assertStatus(t, w, http.StatusOK)
-
-	resp := decode[syncStatusResponse](t, w)
-	if resp.LastSync == "" {
-		t.Fatal("expected last_sync field")
-	}
-}
-
 func TestCORSHeaders(t *testing.T) {
 	te := setup(t)
 
@@ -1309,9 +1138,9 @@ func TestCORSRejectsUnknownOrigin(t *testing.T) {
 func TestCORSBlocksMutatingFromUnknownOrigin(t *testing.T) {
 	te := setup(t)
 
-	// POST from a foreign origin should be blocked (CSRF protection).
+	// PUT from a foreign origin should be blocked (CSRF protection).
 	req := httptest.NewRequest(
-		http.MethodPost, "/api/v1/sync", nil,
+		http.MethodPut, "/api/v1/sessions/test-id/star", nil,
 	)
 	req.Header.Set("Origin", "http://evil-site.com")
 	w := httptest.NewRecorder()
@@ -1322,14 +1151,14 @@ func TestCORSBlocksMutatingFromUnknownOrigin(t *testing.T) {
 func TestCORSAllowsMutatingFromKnownOrigin(t *testing.T) {
 	te := setup(t)
 
-	// POST from the legitimate origin should succeed.
+	// PUT from the legitimate origin should succeed.
 	req := httptest.NewRequest(
-		http.MethodPost, "/api/v1/sync", nil,
+		http.MethodPut, "/api/v1/sessions/test-id/star", nil,
 	)
 	req.Header.Set("Origin", "http://127.0.0.1:0")
 	w := httptest.NewRecorder()
 	te.handler.ServeHTTP(w, req)
-	// Sync returns 200 or 202, not 403.
+	// Star returns 200 or 204, not 403.
 	if w.Code == http.StatusForbidden {
 		t.Fatal("legitimate origin should not be blocked")
 	}
@@ -1351,11 +1180,11 @@ func TestCORSPreflightRejectsBadOrigin(t *testing.T) {
 func TestCORSBlocksMutatingWithNoOrigin(t *testing.T) {
 	te := setup(t)
 
-	// POST with no Origin header should be blocked (prevents
+	// PUT with no Origin header should be blocked (prevents
 	// CSRF where browser omits Origin). Use srv.Handler()
 	// directly to bypass the test wrapper that auto-sets Origin.
 	req := httptest.NewRequest(
-		http.MethodPost, "/api/v1/sync", nil,
+		http.MethodPut, "/api/v1/sessions/test-id/star", nil,
 	)
 	req.Host = "127.0.0.1:0"
 	w := httptest.NewRecorder()
@@ -1452,7 +1281,7 @@ func TestHostHeaderHTTPSPublicOriginExpandsTrustedHosts(
 func TestCORSAllowsConfiguredHTTPSPublicOrigin(t *testing.T) {
 	te := setup(t, withPublicOrigins("https://viewer.example.test"))
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/sync", nil)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/sessions/test-id/star", nil)
 	req.Header.Set("Origin", "https://viewer.example.test")
 	w := httptest.NewRecorder()
 	te.handler.ServeHTTP(w, req)
@@ -1603,7 +1432,7 @@ func TestCORSBindAllPort80RejectsNonLocalIPOrigin(t *testing.T) {
 			})
 
 			req := httptest.NewRequest(
-				http.MethodPost, "/api/v1/sync", nil,
+				http.MethodPut, "/api/v1/sessions/test-id/star", nil,
 			)
 			req.Header.Set("Origin", origin)
 			w := httptest.NewRecorder()
@@ -1719,7 +1548,7 @@ func TestCORSBindAllRejectsNonLocalIPOrigin(t *testing.T) {
 			})
 
 			req := httptest.NewRequest(
-				http.MethodPost, "/api/v1/sync", nil,
+				http.MethodPut, "/api/v1/sessions/test-id/star", nil,
 			)
 			req.Header.Set("Origin", origin)
 			w := httptest.NewRecorder()
@@ -1755,7 +1584,7 @@ func TestCORSBindAllRejectsForeignOrigin(t *testing.T) {
 			})
 
 			req := httptest.NewRequest(
-				http.MethodPost, "/api/v1/sync", nil,
+				http.MethodPut, "/api/v1/sessions/test-id/star", nil,
 			)
 			req.Header.Set("Origin", "http://evil-site.com")
 			w := httptest.NewRecorder()
@@ -1910,721 +1739,6 @@ func TestForbiddenNoCORSWhenRemoteDisabled(t *testing.T) {
 			cors,
 		)
 	}
-}
-
-func TestGetGithubConfig(t *testing.T) {
-	te := setup(t)
-
-	w := te.get(t, "/api/v1/config/github")
-	assertStatus(t, w, http.StatusOK)
-
-	resp := decode[githubConfigResponse](t, w)
-	if resp.Configured {
-		t.Fatal("expected configured=false")
-	}
-}
-
-func TestExportSession(t *testing.T) {
-	te := setup(t)
-	te.seedSession(t, "s1", "my-app", 3)
-	te.seedMessages(t, "s1", 3)
-
-	w := te.get(t, "/api/v1/sessions/s1/export")
-	assertStatus(t, w, http.StatusOK)
-
-	ct := w.Header().Get("Content-Type")
-	if !strings.Contains(ct, "text/html") {
-		t.Fatalf("expected text/html content type, got %q", ct)
-	}
-	cd := w.Header().Get("Content-Disposition")
-	if !strings.Contains(cd, "attachment") {
-		t.Fatalf("expected attachment disposition, got %q", cd)
-	}
-	assertBodyContains(t, w, "my-app")
-}
-
-func TestExportSession_NotFound(t *testing.T) {
-	te := setup(t)
-
-	w := te.get(t, "/api/v1/sessions/nonexistent/export")
-	assertStatus(t, w, http.StatusNotFound)
-}
-
-func TestPublishSession_NoToken(t *testing.T) {
-	te := setup(t)
-	te.seedSession(t, "s1", "my-app", 3)
-
-	w := te.post(t, "/api/v1/sessions/s1/publish", "{}")
-	assertStatus(t, w, http.StatusUnauthorized)
-}
-
-func TestSetGithubConfig_InvalidInput(t *testing.T) {
-	te := setup(t)
-
-	tests := []struct {
-		name string
-		body string
-	}{
-		{"EmptyToken", `{"token": ""}`},
-		{"InvalidJSON", `{bad json`},
-		{"WhitespaceToken", `{"token": "   "}`},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			w := te.post(t, "/api/v1/config/github", tt.body)
-			assertStatus(t, w, http.StatusBadRequest)
-		})
-	}
-}
-
-func TestPublishSession_NotFound(t *testing.T) {
-	te := setup(t)
-	te.srv.SetGithubToken("fake-token")
-
-	w := te.post(t,
-		"/api/v1/sessions/nonexistent/publish", "{}")
-	assertStatus(t, w, http.StatusNotFound)
-}
-
-func TestExportSession_HTMLContent(t *testing.T) {
-	te := setup(t)
-	te.seedSession(t, "s1", "my-app", 3)
-	te.seedMessages(t, "s1", 3)
-
-	w := te.get(t, "/api/v1/sessions/s1/export")
-	assertStatus(t, w, http.StatusOK)
-
-	body := w.Body.String()
-	for _, want := range []string{
-		"<!DOCTYPE html>",
-		"<header>",
-		"<main>",
-		"message-content",
-		"message-role",
-		"Agent Session",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf(
-				"expected to contain %q, got:\n%s",
-				want, body,
-			)
-		}
-	}
-}
-
-func TestUploadSession(t *testing.T) {
-	te := setup(t)
-
-	content := testjsonl.NewSessionBuilder().
-		AddClaudeUser(tsEarly, "Hello upload").
-		AddClaudeAssistant(tsEarlyS5, "Hi!").
-		String()
-
-	w := te.upload(t, "upload-test.jsonl", content,
-		"project=myproj&machine=remote")
-	assertStatus(t, w, http.StatusOK)
-
-	resp := decode[uploadResponse](t, w)
-	if resp.SessionID != "upload-test" {
-		t.Errorf("session_id = %v", resp.SessionID)
-	}
-	if resp.Project != "myproj" {
-		t.Errorf("project = %v", resp.Project)
-	}
-	if resp.Machine != "remote" {
-		t.Errorf("machine = %v", resp.Machine)
-	}
-	if resp.Messages != 2 {
-		t.Errorf("messages = %v", resp.Messages)
-	}
-
-	sess, err := te.db.GetSession(context.Background(), "upload-test")
-	if err != nil {
-		t.Fatalf("GetSession: %v", err)
-	}
-	if sess == nil {
-		t.Fatal("session not found in DB")
-		return
-	}
-	if sess.Project != "myproj" {
-		t.Errorf("stored project = %q", sess.Project)
-	}
-}
-
-func TestUploadSession_InfersRelationshipType(t *testing.T) {
-	te := setup(t)
-
-	// Build a session whose first entry has a different sessionId,
-	// making it a child session. The filename starts with "agent-"
-	// so it should be inferred as a subagent.
-	content := testjsonl.NewSessionBuilder().
-		AddClaudeUserWithSessionID(
-			tsEarly, "Run task", "parent-session",
-		).
-		AddClaudeAssistant(tsEarlyS5, "Done.").
-		String()
-
-	w := te.upload(t, "agent-task42.jsonl", content,
-		"project=myproj&machine=remote")
-	assertStatus(t, w, http.StatusOK)
-
-	sess, err := te.db.GetSession(
-		context.Background(), "agent-task42",
-	)
-	if err != nil {
-		t.Fatalf("GetSession: %v", err)
-	}
-	if sess == nil {
-		t.Fatal("session not found in DB")
-		return
-	}
-	if sess.RelationshipType != "subagent" {
-		t.Errorf(
-			"RelationshipType = %q, want %q",
-			sess.RelationshipType, "subagent",
-		)
-	}
-}
-
-func TestUploadSession_Errors(t *testing.T) {
-	tests := []struct {
-		name     string
-		filename string
-		content  string
-		query    string
-	}{
-		{
-			"InvalidExtension",
-			"bad.txt", "content", "project=myproj",
-		},
-		{
-			"MissingProject",
-			"test.jsonl", "{}", "",
-		},
-		{
-			"TraversalProject",
-			"test.jsonl", "{}", "project=../../../etc",
-		},
-		{
-			"TraversalFilename",
-			"..secret.jsonl", "{}", "project=safe",
-		},
-		{
-			"DotPrefixProject",
-			"test.jsonl", "{}", "project=.hidden",
-		},
-		{
-			"DotPrefixFilename",
-			".hidden.jsonl", "{}", "project=safe",
-		},
-		{
-			"SlashInProject",
-			"test.jsonl", "{}", "project=foo/bar",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			te := setup(t)
-			w := te.upload(t,
-				tt.filename, tt.content, tt.query)
-			assertStatus(t, w, http.StatusBadRequest)
-		})
-	}
-}
-
-func TestUploadSession_EmptyFile(t *testing.T) {
-	te := setup(t)
-
-	w := te.upload(t, "empty.jsonl", "",
-		"project=myproj")
-	assertStatus(t, w, http.StatusOK)
-
-	resp := decode[uploadResponse](t, w)
-	if resp.Messages != 0 {
-		t.Errorf("messages = %v, want 0", resp.Messages)
-	}
-}
-
-// noFlushWriter wraps an http.ResponseWriter without Flusher.
-type noFlushWriter struct {
-	http.ResponseWriter
-}
-
-func TestTriggerSync_NonStreaming(t *testing.T) {
-	te := setup(t)
-
-	// Seed a session file so we expect at least one session in the sync result.
-	te.writeSessionFile(t, "test-proj", "sync-test.jsonl",
-		testjsonl.NewSessionBuilder().
-			AddClaudeUser(tsZero, "msg"),
-	)
-
-	rec := httptest.NewRecorder()
-	nf := &noFlushWriter{rec}
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/sync", nil)
-	req.Header.Set("Content-Type", "application/json")
-	te.handler.ServeHTTP(nf, req)
-	assertStatus(t, rec, http.StatusOK)
-
-	resp := decode[syncResultResponse](t, rec)
-	if resp.TotalSessions != 1 {
-		t.Fatalf("expected 1 total_session, got %d", resp.TotalSessions)
-	}
-}
-
-// flushRecorder wraps httptest.ResponseRecorder to implement
-// http.Flusher, enabling SSE streaming tests.
-type flushRecorder struct {
-	*httptest.ResponseRecorder
-	mu stdlibsync.Mutex
-}
-
-func (f *flushRecorder) Write(b []byte) (int, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.ResponseRecorder.Write(b)
-}
-
-func (f *flushRecorder) Flush() {
-	f.ResponseRecorder.Flush()
-}
-
-func (f *flushRecorder) BodyString() string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.Body.String()
-}
-
-func TestTriggerSync_SSE(t *testing.T) {
-	te := setup(t)
-
-	te.writeSessionFile(t, "test-proj", "sse-test.jsonl",
-		testjsonl.NewSessionBuilder().
-			AddClaudeUser(tsZero, "msg"),
-	)
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/sync", nil)
-	w := &flushRecorder{ResponseRecorder: httptest.NewRecorder()}
-	te.handler.ServeHTTP(w, req)
-
-	te.waitForSSEEvent(t, w, "done", 5*time.Second)
-	te.waitForSSEEvent(t, w, "progress", 5*time.Second)
-}
-
-func TestWatchSession_Events(t *testing.T) {
-	te := setup(t)
-
-	b := testjsonl.NewSessionBuilder().
-		AddClaudeUser(tsZero, "initial")
-	content := b.String()
-	sessionPath := te.writeSessionFile(t, "watch-proj", "watch-sess.jsonl", b)
-
-	engine := sync.NewEngine(te.db, sync.EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentClaude: {te.claudeDir},
-			parser.AgentCodex:  {filepath.Join(te.dataDir, "codex")},
-		},
-		Machine: "test",
-	})
-	engine.SyncAll(context.Background(), nil)
-
-	ctx, cancel := context.WithTimeout(
-		context.Background(), 5*time.Second,
-	)
-	defer cancel()
-
-	req := httptest.NewRequest(
-		http.MethodGet, "/api/v1/sessions/watch-sess/watch", nil,
-	).WithContext(ctx)
-	w := &flushRecorder{ResponseRecorder: httptest.NewRecorder()}
-
-	done := make(chan struct{})
-	go func() {
-		te.handler.ServeHTTP(w, req)
-		close(done)
-	}()
-
-	time.Sleep(200 * time.Millisecond)
-
-	updated := content + testjsonl.NewSessionBuilder().
-		AddClaudeAssistant(tsZeroS5, "response").
-		String()
-	if err := os.WriteFile(
-		sessionPath, []byte(updated), 0o644,
-	); err != nil {
-		t.Fatalf("writing updated session file: %v", err)
-	}
-
-	// Sync the file to update the DB — in production the
-	// file watcher does this via SyncPaths.
-	engine.SyncPaths([]string{sessionPath})
-
-	te.waitForSSEEvent(t, w, "session_updated", 5*time.Second)
-	cancel()
-	<-done
-}
-
-func TestWatchSession_FileDisappearAndResolve(t *testing.T) {
-	te := setup(t)
-
-	b := testjsonl.NewSessionBuilder().
-		AddClaudeUser(tsZero, "initial")
-	content := b.String()
-	sessionPath := te.writeSessionFile(t, "vanish-proj", "vanish-sess.jsonl", b)
-
-	engine := sync.NewEngine(te.db, sync.EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentClaude: {te.claudeDir},
-			parser.AgentCodex:  {filepath.Join(te.dataDir, "codex")},
-		},
-		Machine: "test",
-	})
-	engine.SyncAll(context.Background(), nil)
-
-	ctx, cancel := context.WithTimeout(
-		context.Background(), 15*time.Second,
-	)
-	defer cancel()
-
-	req := httptest.NewRequest(
-		http.MethodGet, "/api/v1/sessions/vanish-sess/watch", nil,
-	).WithContext(ctx)
-	w := &flushRecorder{ResponseRecorder: httptest.NewRecorder()}
-
-	done := make(chan struct{})
-	go func() {
-		te.handler.ServeHTTP(w, req)
-		close(done)
-	}()
-
-	// Let the monitor start and record the initial mtime.
-	time.Sleep(200 * time.Millisecond)
-
-	// Delete the source file to simulate disappearance.
-	if err := os.Remove(sessionPath); err != nil {
-		t.Fatalf("removing session file: %v", err)
-	}
-
-	// Wait for at least one poll tick to notice the missing
-	// file and clear the cached path.
-	time.Sleep(2 * time.Second)
-
-	// Recreate the file with updated content at a NEW location
-	// so we verify that FindSourceFile re-scans and the
-	// fallback sync picks up the change.
-	updated := content + testjsonl.NewSessionBuilder().
-		AddClaudeAssistant(tsZeroS5, "recovered").
-		String()
-	te.writeProjectFile(t, "moved-proj", "vanish-sess.jsonl", updated)
-
-	te.waitForSSEEvent(t, w, "session_updated", 12*time.Second)
-	cancel()
-	<-done
-}
-
-func TestTriggerSync_SSEEvents(t *testing.T) {
-	te := setup(t)
-
-	for _, name := range []string{"a", "b"} {
-		te.writeSessionFile(t, "sse-proj", name+".jsonl",
-			testjsonl.NewSessionBuilder().
-				AddClaudeUser(tsZero, fmt.Sprintf("msg %s", name)),
-		)
-	}
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/sync", nil)
-	w := &flushRecorder{ResponseRecorder: httptest.NewRecorder()}
-	te.handler.ServeHTTP(w, req)
-
-	events := parseSSE(w.BodyString())
-	hasDone := false
-	hasProgress := false
-	for _, e := range events {
-		if e.Event == "done" {
-			hasDone = true
-		}
-		if e.Event == "progress" {
-			hasProgress = true
-		}
-	}
-	if !hasDone {
-		t.Error("expected done event")
-	}
-	if !hasProgress {
-		t.Error("expected progress event")
-	}
-}
-
-func TestResyncEndpoint(t *testing.T) {
-	te := setup(t)
-
-	te.writeSessionFile(t, "resync-proj", "resync.jsonl",
-		testjsonl.NewSessionBuilder().
-			AddClaudeUser(tsZero, "msg resync"),
-	)
-
-	// Initial sync — session gets processed normally.
-	syncReq := httptest.NewRequest(http.MethodPost, "/api/v1/sync", nil)
-	syncW := &flushRecorder{ResponseRecorder: httptest.NewRecorder()}
-	te.handler.ServeHTTP(syncW, syncReq)
-
-	syncStats := parseSSEDoneStats(t, syncW.BodyString())
-	if syncStats.Synced != 1 {
-		t.Fatalf("initial sync: synced = %d, want 1",
-			syncStats.Synced)
-	}
-
-	// Second normal sync — file is unchanged so it's skipped.
-	sync2Req := httptest.NewRequest(http.MethodPost, "/api/v1/sync", nil)
-	sync2W := &flushRecorder{ResponseRecorder: httptest.NewRecorder()}
-	te.handler.ServeHTTP(sync2W, sync2Req)
-
-	sync2Stats := parseSSEDoneStats(t, sync2W.BodyString())
-	if sync2Stats.Synced != 0 {
-		t.Fatalf("second sync: synced = %d, want 0 (skipped)",
-			sync2Stats.Synced)
-	}
-
-	// Resync — should re-process the same unchanged file.
-	resyncReq := httptest.NewRequest(
-		http.MethodPost, "/api/v1/resync", nil,
-	)
-	resyncW := &flushRecorder{
-		ResponseRecorder: httptest.NewRecorder(),
-	}
-	te.handler.ServeHTTP(resyncW, resyncReq)
-
-	resyncStats := parseSSEDoneStats(t, resyncW.BodyString())
-	if resyncStats.Synced != 1 {
-		t.Fatalf("resync: synced = %d, want 1 (reprocessed)",
-			resyncStats.Synced)
-	}
-}
-
-// TestResyncPreservesDataThroughSwap verifies the full resync
-// flow end-to-end: initial sync, resync (which rebuilds the DB
-// from scratch and swaps files), then verifies sessions and
-// messages are accessible via the API. This exercises the
-// close-rename-reopen sequence that is critical on Windows.
-func TestResyncPreservesDataThroughSwap(t *testing.T) {
-	te := setup(t)
-
-	// Write two session files in different projects.
-	te.writeSessionFile(t, "proj-a", "a.jsonl",
-		testjsonl.NewSessionBuilder().
-			AddClaudeUser(tsZero, "hello from proj-a").
-			AddClaudeAssistant(tsZeroS5, "response a"),
-	)
-	te.writeSessionFile(t, "proj-b", "b.jsonl",
-		testjsonl.NewSessionBuilder().
-			AddClaudeUser(tsEarly, "hello from proj-b").
-			AddClaudeAssistant(tsEarlyS5, "response b"),
-	)
-
-	// Initial sync.
-	syncReq := httptest.NewRequest(
-		http.MethodPost, "/api/v1/sync", nil,
-	)
-	syncW := &flushRecorder{
-		ResponseRecorder: httptest.NewRecorder(),
-	}
-	te.handler.ServeHTTP(syncW, syncReq)
-	syncStats := parseSSEDoneStats(t, syncW.BodyString())
-	if syncStats.Synced != 2 {
-		t.Fatalf(
-			"initial sync: synced = %d, want 2",
-			syncStats.Synced,
-		)
-	}
-
-	// Verify sessions are accessible before resync.
-	w := te.get(t,
-		"/api/v1/sessions?include_one_shot=true",
-	)
-	assertStatus(t, w, http.StatusOK)
-	before := decode[sessionListResponse](t, w)
-	if before.Total != 2 {
-		t.Fatalf(
-			"before resync: total = %d, want 2",
-			before.Total,
-		)
-	}
-
-	// Resync — rebuilds the database from scratch and swaps.
-	resyncReq := httptest.NewRequest(
-		http.MethodPost, "/api/v1/resync", nil,
-	)
-	resyncW := &flushRecorder{
-		ResponseRecorder: httptest.NewRecorder(),
-	}
-	te.handler.ServeHTTP(resyncW, resyncReq)
-	resyncStats := parseSSEDoneStats(t, resyncW.BodyString())
-	if resyncStats.Synced != 2 {
-		t.Fatalf(
-			"resync: synced = %d, want 2",
-			resyncStats.Synced,
-		)
-	}
-
-	// Verify sessions survived the DB swap.
-	w = te.get(t,
-		"/api/v1/sessions?include_one_shot=true",
-	)
-	assertStatus(t, w, http.StatusOK)
-	after := decode[sessionListResponse](t, w)
-	if after.Total != 2 {
-		t.Fatalf(
-			"after resync: total = %d, want 2",
-			after.Total,
-		)
-	}
-
-	// Verify messages are accessible for each session.
-	for _, s := range after.Sessions {
-		msgW := te.get(t, fmt.Sprintf(
-			"/api/v1/sessions/%s/messages", s.ID,
-		))
-		assertStatus(t, msgW, http.StatusOK)
-		msgs := decode[messageListResponse](t, msgW)
-		if msgs.Count < 2 {
-			t.Errorf(
-				"session %s: messages = %d, want >= 2",
-				s.ID, msgs.Count,
-			)
-		}
-	}
-
-	// Verify projects endpoint works (exercises reader pool).
-	projW := te.get(t,
-		"/api/v1/projects?include_one_shot=true",
-	)
-	assertStatus(t, projW, http.StatusOK)
-	projects := decode[projectListResponse](t, projW)
-	if len(projects.Projects) != 2 {
-		t.Errorf(
-			"projects = %d, want 2",
-			len(projects.Projects),
-		)
-	}
-}
-
-// TestResyncConcurrentReads verifies that concurrent API reads
-// don't panic or deadlock during resync, and that reads succeed
-// after resync completes. During the close->rename->reopen
-// window, SQLite may return various transient errors (database
-// is closed, no such file, no such table). These are expected
-// since resync is a rare manual operation.
-func TestResyncConcurrentReads(t *testing.T) {
-	te := setup(t)
-
-	te.writeSessionFile(t, "conc-proj", "c.jsonl",
-		testjsonl.NewSessionBuilder().
-			AddClaudeUser(tsZero, "concurrent test"),
-	)
-
-	// Initial sync.
-	syncReq := httptest.NewRequest(
-		http.MethodPost, "/api/v1/sync", nil,
-	)
-	syncW := &flushRecorder{
-		ResponseRecorder: httptest.NewRecorder(),
-	}
-	te.handler.ServeHTTP(syncW, syncReq)
-
-	// Spin up concurrent readers with a barrier to ensure
-	// they are actively querying before resync starts.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	var wg stdlibsync.WaitGroup
-	var readersReady stdlibsync.WaitGroup
-	readersReady.Add(4)
-
-	for range 4 {
-		wg.Go(func() {
-			readySignaled := false
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-				req := httptest.NewRequest(
-					http.MethodGet, "/api/v1/sessions",
-					nil,
-				)
-				w := httptest.NewRecorder()
-				te.handler.ServeHTTP(w, req)
-
-				if !readySignaled && w.Code == http.StatusOK {
-					readersReady.Done()
-					readySignaled = true
-				}
-				// Transient 500s are expected during the
-				// close->reopen window. We only care that
-				// no panics/deadlocks occur and reads
-				// succeed after resync (verified below).
-			}
-		})
-	}
-
-	// Wait for all readers to complete at least one
-	// successful request before triggering resync.
-	readersReady.Wait()
-
-	// Trigger resync while readers are active.
-	resyncReq := httptest.NewRequest(
-		http.MethodPost, "/api/v1/resync", nil,
-	)
-	resyncW := &flushRecorder{
-		ResponseRecorder: httptest.NewRecorder(),
-	}
-	te.handler.ServeHTTP(resyncW, resyncReq)
-
-	// Verify resync actually succeeded.
-	resyncStats := parseSSEDoneStats(t, resyncW.BodyString())
-	if resyncStats.Synced != 1 {
-		t.Errorf(
-			"resync: synced = %d, want 1",
-			resyncStats.Synced,
-		)
-	}
-
-	cancel()
-	wg.Wait()
-
-	// The real assertion: reads must succeed after resync
-	// completes. If the close->reopen cycle left the DB
-	// in a bad state, this will fail.
-	w := te.get(t,
-		"/api/v1/sessions?include_one_shot=true",
-	)
-	assertStatus(t, w, http.StatusOK)
-	resp := decode[sessionListResponse](t, w)
-	if resp.Total != 1 {
-		t.Errorf("post-resync sessions = %d, want 1", resp.Total)
-	}
-}
-
-// parseSSEDoneStats extracts the SyncStats from the "done" SSE
-// event in a response body. Fails the test if no done event.
-func parseSSEDoneStats(
-	t *testing.T, body string,
-) syncResultResponse {
-	t.Helper()
-	events := parseSSE(body)
-	for _, e := range events {
-		if e.Event == "done" {
-			var stats syncResultResponse
-			if err := json.Unmarshal([]byte(e.Data), &stats); err != nil {
-				t.Fatalf("parsing done data: %v", err)
-			}
-			return stats
-		}
-	}
-	t.Fatal("no done event in SSE stream")
-	return syncResultResponse{}
 }
 
 func TestListSessions_Limits(t *testing.T) {

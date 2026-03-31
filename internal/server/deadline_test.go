@@ -24,7 +24,6 @@ func TestMiddleware_Timeout(t *testing.T) {
 		{"GetStats", http.MethodGet, "/api/v1/stats"},
 		{"ListProjects", http.MethodGet, "/api/v1/projects"},
 		{"ListMachines", http.MethodGet, "/api/v1/machines"},
-		{"GetSessionActivity", http.MethodGet, "/api/v1/sessions/s1/activity"},
 	}
 
 	for _, tt := range tests {
