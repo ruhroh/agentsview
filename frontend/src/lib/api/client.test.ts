@@ -8,6 +8,10 @@ import {
   getAnalyticsHeatmap,
   getAnalyticsTopSessions,
   ApiError,
+  watchSession,
+  setAuthToken,
+  setServerUrl,
+  isClerkAuthMode,
 } from "./client.js";
 import type { SyncHandle } from "./client.js";
 import type { SyncProgress } from "./types.js";
@@ -152,6 +156,126 @@ describe("triggerSync SSE parsing", () => {
 
     expect(progress.length).toBe(1);
     expect(progress[0]!.phase).toBe("scanning");
+  });
+});
+
+describe("auth mode selection", () => {
+  const originalClerkKey =
+    import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
+
+  beforeEach(() => {
+    localStorage.clear();
+    document.head.innerHTML = "";
+    import.meta.env.VITE_CLERK_PUBLISHABLE_KEY = "";
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    localStorage.clear();
+    document.head.innerHTML = "";
+    import.meta.env.VITE_CLERK_PUBLISHABLE_KEY = originalClerkKey;
+  });
+
+  it("does not inject bearer headers in hosted Clerk mode", async () => {
+    import.meta.env.VITE_CLERK_PUBLISHABLE_KEY = "pk_test_123";
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ sessions: [], next_cursor: null }),
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    setAuthToken("legacy-token");
+
+    await listSessions();
+
+    expect(isClerkAuthMode()).toBe(true);
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/v1/sessions",
+      {},
+    );
+  });
+
+  it("uses runtime Clerk config when build env is missing", async () => {
+    document.head.innerHTML =
+      '<meta name="agentsview-clerk-publishable-key" content="pk_runtime_123">';
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ sessions: [], next_cursor: null }),
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    setAuthToken("legacy-token");
+
+    await listSessions();
+
+    expect(isClerkAuthMode()).toBe(true);
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/v1/sessions",
+      {},
+    );
+  });
+
+  it("keeps legacy bearer headers for explicit remote connections", async () => {
+    import.meta.env.VITE_CLERK_PUBLISHABLE_KEY = "pk_test_123";
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ sessions: [], next_cursor: null }),
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    setServerUrl("https://remote.example.test");
+    setAuthToken("legacy-token");
+
+    await listSessions();
+
+    const headers = new Headers(
+      fetchSpy.mock.calls[0]?.[1]?.headers,
+    );
+    expect(isClerkAuthMode()).toBe(false);
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://remote.example.test/api/v1/sessions",
+      expect.objectContaining({ headers: expect.any(Headers) }),
+    );
+    expect(headers.get("Authorization")).toBe("Bearer legacy-token");
+  });
+
+  it("uses plain watch URLs in hosted Clerk mode", () => {
+    import.meta.env.VITE_CLERK_PUBLISHABLE_KEY = "pk_test_123";
+    const eventSourceSpy = vi.fn();
+    class MockEventSource {
+      addEventListener = vi.fn();
+      close = vi.fn();
+
+      constructor(url: string) {
+        eventSourceSpy(url);
+      }
+    }
+    vi.stubGlobal("EventSource", MockEventSource as typeof EventSource);
+    setAuthToken("legacy-token");
+
+    watchSession("session-1", vi.fn());
+
+    expect(eventSourceSpy).toHaveBeenCalledWith(
+      "/api/v1/sessions/session-1/watch",
+    );
+  });
+
+  it("keeps legacy watch token query params outside Clerk mode", () => {
+    const eventSourceSpy = vi.fn();
+    class MockEventSource {
+      addEventListener = vi.fn();
+      close = vi.fn();
+
+      constructor(url: string) {
+        eventSourceSpy(url);
+      }
+    }
+    vi.stubGlobal("EventSource", MockEventSource as typeof EventSource);
+    setServerUrl("https://remote.example.test");
+    setAuthToken("legacy-token");
+
+    watchSession("session-1", vi.fn());
+
+    expect(eventSourceSpy).toHaveBeenCalledWith(
+      "https://remote.example.test/api/v1/sessions/session-1/watch?token=legacy-token",
+    );
   });
 });
 

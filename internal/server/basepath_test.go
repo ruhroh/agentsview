@@ -58,6 +58,25 @@ func TestBasePath_InjectsBaseHrefIntoHTML(t *testing.T) {
 	}
 }
 
+func TestServeIndex_InjectsRuntimeClerkMeta(t *testing.T) {
+	s := testServer(t, 0)
+	s.cfg.ClerkPublishableKey = `pk_test_"quoted"&value`
+
+	req := httptest.NewRequest("GET", "/", nil)
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET / = %d, want 200", w.Code)
+	}
+	if !strings.Contains(
+		w.Body.String(),
+		`<meta name="agentsview-clerk-publishable-key" content="pk_test_&#34;quoted&#34;&amp;value">`,
+	) {
+		t.Fatalf("missing escaped Clerk runtime meta tag: %s", w.Body.String())
+	}
+}
+
 func TestBasePath_RewritesAssetPaths(t *testing.T) {
 	s := testServer(t, 0, WithBasePath("/viewer"))
 

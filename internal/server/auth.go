@@ -5,6 +5,8 @@ import (
 	"net"
 	"net/http"
 	"strings"
+
+	clerkapi "github.com/clerk/clerk-sdk-go/v2"
 )
 
 // contextKey is an unexported type for context keys in this package.
@@ -15,6 +17,7 @@ const (
 	// remote client. When set to true, host-check and CORS middleware
 	// skip their restrictions.
 	ctxKeyRemoteAuth contextKey = iota
+	ctxKeyClerkAuth
 )
 
 // isRemoteAuth returns true if the request was authenticated as a
@@ -22,6 +25,11 @@ const (
 func isRemoteAuth(r *http.Request) bool {
 	v, _ := r.Context().Value(ctxKeyRemoteAuth).(bool)
 	return v
+}
+
+func clerkAuthFromRequest(r *http.Request) (*ClerkAuth, bool) {
+	v, ok := r.Context().Value(ctxKeyClerkAuth).(*ClerkAuth)
+	return v, ok
 }
 
 // isLocalhostRequest returns true when the request originates from
@@ -39,9 +47,10 @@ func isLocalhostRequest(r *http.Request) bool {
 	return ip.IsLoopback()
 }
 
-// authMiddleware enforces Bearer token authentication for remote
-// API requests. Localhost connections always bypass auth for backward
-// compatibility. Non-API routes (static assets) are never gated.
+// authMiddleware enforces remote API authentication using either
+// Clerk sessions or the legacy static bearer token flow. Localhost
+// connections always bypass auth when remote access is disabled.
+// Non-API routes (static assets) are never gated.
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Only gate /api/ routes — static assets are always served.
@@ -53,7 +62,9 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		// Read config once for all checks below.
 		s.mu.RLock()
 		token := s.cfg.AuthToken
+		clerkEnabled := s.cfg.ClerkSecretKey != ""
 		remoteEnabled := s.cfg.RemoteAccess
+		clerkVerifier := s.clerkVerifier
 		s.mu.RUnlock()
 
 		// CORS preflight requests (OPTIONS) never include credentials.
@@ -63,7 +74,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		// CORS middleware allows the preflight for cross-origin
 		// remote clients.
 		if r.Method == http.MethodOptions {
-			if remoteEnabled && token != "" {
+			if remoteEnabled && (token != "" || clerkEnabled) {
 				ctx := context.WithValue(r.Context(), ctxKeyRemoteAuth, true)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
@@ -94,11 +105,35 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}
-		// Remote access enabled but no token configured yet — reject.
+		// Remote access enabled but no auth configured yet — reject.
 		// No CORS headers — this is a server misconfiguration, not
 		// an auth challenge the client can resolve with a token.
-		if token == "" {
+		if !clerkEnabled && token == "" {
 			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+
+		if clerkEnabled {
+			if clerkVerifier == nil {
+				http.Error(w, "Forbidden", http.StatusForbidden)
+				return
+			}
+			claims, err := clerkVerifier.VerifyRequest(r)
+			if err != nil {
+				setCORSOnAuthError(w, r)
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+
+			auth := &ClerkAuth{
+				UserID:          claims.Subject,
+				SessionID:       claims.SessionID,
+				AuthorizedParty: claims.AuthorizedParty,
+			}
+			ctx := context.WithValue(r.Context(), ctxKeyRemoteAuth, true)
+			ctx = context.WithValue(ctx, ctxKeyClerkAuth, auth)
+			ctx = clerkapi.ContextWithSessionClaims(ctx, claims)
+			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
 

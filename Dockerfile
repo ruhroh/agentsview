@@ -1,6 +1,8 @@
 # -- Frontend build --
 FROM node:22-slim AS frontend
 WORKDIR /src/frontend
+ARG VITE_CLERK_PUBLISHABLE_KEY
+ENV VITE_CLERK_PUBLISHABLE_KEY=$VITE_CLERK_PUBLISHABLE_KEY
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./

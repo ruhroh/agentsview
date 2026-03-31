@@ -107,13 +107,16 @@ func runServe(args []string) {
 		cfg.Host = "0.0.0.0"
 	}
 
-	// Ensure an auth token exists so the API is never exposed
-	// on the network without authentication.
-	if err := cfg.EnsureAuthToken(); err != nil {
-		log.Fatalf("Failed to generate auth token: %v", err)
-	}
-	if cfg.AuthToken != "" {
-		fmt.Printf("Remote access enabled. Auth token: %s\n", cfg.AuthToken)
+	// Keep the legacy static-token flow for non-Clerk deployments.
+	// Clerk-backed deployments authenticate through Clerk sessions
+	// instead of generating a second unrelated token.
+	if cfg.ClerkSecretKey == "" {
+		if err := cfg.EnsureAuthToken(); err != nil {
+			log.Fatalf("Failed to generate auth token: %v", err)
+		}
+		if cfg.AuthToken != "" {
+			fmt.Printf("Remote access enabled. Auth token: %s\n", cfg.AuthToken)
+		}
 	}
 
 	rtOpts := serveRuntimeOptions{

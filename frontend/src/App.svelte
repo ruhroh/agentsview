@@ -18,7 +18,11 @@
   import { starred } from "./lib/stores/starred.svelte.js";
   import { pins } from "./lib/stores/pins.svelte.js";
   import { settings } from "./lib/stores/settings.svelte.js";
-  import { setAuthToken, getAuthToken, setServerUrl } from "./lib/api/client.js";
+  import {
+    setAuthToken,
+    getAuthToken,
+    setServerUrl,
+  } from "./lib/api/client.js";
   import { registerShortcuts } from "./lib/utils/keyboard.js";
   import { shouldAutoSwitchTranscriptModeToNormal } from "./lib/utils/transcript-mode.js";
 
@@ -288,6 +292,7 @@
 
   onMount(() => {
     globalAuthToken = getAuthToken();
+
     settings.load();
     starred.load();
     sync.loadStatus();
@@ -338,7 +343,7 @@
           setAuthToken("");
           setServerUrl("");
           settings.needsAuth = false;
-          settings.load();
+          window.location.reload();
         }}
       >
         Disconnect and reset

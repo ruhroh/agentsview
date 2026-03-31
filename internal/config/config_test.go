@@ -180,6 +180,108 @@ func TestLoad_PublicOriginsRejectInvalid(t *testing.T) {
 	}
 }
 
+func TestLoad_ClerkAuthorizedPartiesFromEnv(t *testing.T) {
+	setupTestEnv(t)
+	t.Setenv("CLERK_SECRET_KEY", "sk_test_123")
+	t.Setenv(
+		"CLERK_AUTHORIZED_PARTIES",
+		"https://Viewer.Example.Test/,http://viewer.example.test:8004",
+	)
+
+	cfg, err := LoadMinimal()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if cfg.ClerkSecretKey != "sk_test_123" {
+		t.Fatalf(
+			"ClerkSecretKey = %q, want %q",
+			cfg.ClerkSecretKey,
+			"sk_test_123",
+		)
+	}
+	got := strings.Join(cfg.ClerkAuthorizedParties, ",")
+	want := "https://viewer.example.test,http://viewer.example.test:8004"
+	if got != want {
+		t.Fatalf(
+			"ClerkAuthorizedParties = %q, want %q",
+			got,
+			want,
+		)
+	}
+}
+
+func TestLoad_ClerkEnvOverridesConfigFile(t *testing.T) {
+	tmp := setupTestEnv(t)
+	writeConfig(t, tmp, map[string]any{
+		"clerk_publishable_key":    "pk_file",
+		"clerk_secret_key":         "sk_file",
+		"clerk_authorized_parties": []string{"https://file.example.test"},
+	})
+	t.Setenv("CLERK_PUBLISHABLE_KEY", "pk_env")
+	t.Setenv("CLERK_SECRET_KEY", "sk_env")
+	t.Setenv(
+		"CLERK_AUTHORIZED_PARTIES",
+		"https://env.example.test",
+	)
+
+	cfg, err := LoadMinimal()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if cfg.ClerkSecretKey != "sk_env" {
+		t.Fatalf("ClerkSecretKey = %q, want %q", cfg.ClerkSecretKey, "sk_env")
+	}
+	if cfg.ClerkPublishableKey != "pk_env" {
+		t.Fatalf(
+			"ClerkPublishableKey = %q, want %q",
+			cfg.ClerkPublishableKey,
+			"pk_env",
+		)
+	}
+	got := strings.Join(cfg.ClerkAuthorizedParties, ",")
+	want := "https://env.example.test"
+	if got != want {
+		t.Fatalf(
+			"ClerkAuthorizedParties = %q, want %q",
+			got,
+			want,
+		)
+	}
+}
+
+func TestLoad_ClerkPublishableKeyFallsBackToViteEnv(t *testing.T) {
+	setupTestEnv(t)
+	t.Setenv("VITE_CLERK_PUBLISHABLE_KEY", "pk_vite_123")
+
+	cfg, err := LoadMinimal()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if cfg.ClerkPublishableKey != "pk_vite_123" {
+		t.Fatalf(
+			"ClerkPublishableKey = %q, want %q",
+			cfg.ClerkPublishableKey,
+			"pk_vite_123",
+		)
+	}
+}
+
+func TestLoad_ClerkRequiresAuthorizedParties(t *testing.T) {
+	setupTestEnv(t)
+	t.Setenv("CLERK_SECRET_KEY", "sk_test_123")
+
+	_, err := LoadMinimal()
+	if err == nil {
+		t.Fatal("expected missing Clerk authorized parties error")
+	}
+	if !strings.Contains(err.Error(), "clerk_secret_key requires") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestLoad_PublicURLMergedIntoOrigins(t *testing.T) {
 	tmp := setupTestEnv(t)
 	writeConfig(t, tmp, map[string]any{

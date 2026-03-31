@@ -275,7 +275,7 @@ func TestCSPMiddlewareSetsHeaderOnNonAPIRoutes(t *testing.T) {
 			inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
 			})
-			handler := cspMiddleware(tt.host, tt.port, tt.publicOrigins, tt.bindAllIPs, inner)
+			handler := cspMiddleware(tt.host, tt.port, tt.publicOrigins, tt.bindAllIPs, "", inner)
 
 			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
 			w := httptest.NewRecorder()
@@ -306,6 +306,47 @@ func TestCSPMiddlewareSetsHeaderOnNonAPIRoutes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestClerkFrontendDomain(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		key  string
+		want string
+	}{
+		{"", ""},
+		{"invalid", ""},
+		// pk_test_ + base64("optimum-kite-19.clerk.accounts.dev$")
+		{"pk_test_b3B0aW11bS1raXRlLTE5LmNsZXJrLmFjY291bnRzLmRldiQ", "optimum-kite-19.clerk.accounts.dev"},
+		{"pk_live_dGVzdC5jbGVyay5hY2NvdW50cy5kZXYk", "test.clerk.accounts.dev"},
+	}
+	for _, tt := range tests {
+		got := clerkFrontendDomain(tt.key)
+		if got != tt.want {
+			t.Errorf("clerkFrontendDomain(%q) = %q, want %q", tt.key, got, tt.want)
+		}
+	}
+}
+
+func TestCSPMiddleware_ClerkDomains(t *testing.T) {
+	t.Parallel()
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	clerkKey := "pk_test_b3B0aW11bS1raXRlLTE5LmNsZXJrLmFjY291bnRzLmRldiQ"
+	handler := cspMiddleware("127.0.0.1", 8080, nil, nil, clerkKey, inner)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	csp := w.Header().Get("Content-Security-Policy")
+	clerkOrigin := "https://optimum-kite-19.clerk.accounts.dev"
+	for _, directive := range []string{"script-src", "connect-src", "img-src", "style-src", "frame-src"} {
+		if !strings.Contains(csp, directive) || !strings.Contains(csp, clerkOrigin) {
+			t.Errorf("CSP missing Clerk origin in %s; got %q", directive, csp)
+		}
 	}
 }
 

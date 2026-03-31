@@ -48,3 +48,5 @@ html/
 .superset/
 .github/hooks/
 .superpowers/
+.env
+.osgrep/

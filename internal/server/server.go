@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"html"
 	"io"
 	"io/fs"
 	"log"
@@ -55,6 +57,8 @@ type Server struct {
 	// under this prefix and a <base href> tag is injected
 	// into the SPA's index.html.
 	basePath string
+
+	clerkVerifier *ClerkVerifier
 }
 
 // New creates a new Server.
@@ -73,6 +77,16 @@ func New(
 		mux:        http.NewServeMux(),
 		spaFS:      dist,
 		spaHandler: http.FileServerFS(dist),
+	}
+	if cfg.ClerkSecretKey != "" {
+		verifier, err := NewClerkVerifier(
+			cfg.ClerkSecretKey,
+			cfg.ClerkAuthorizedParties,
+		)
+		if err != nil {
+			log.Fatalf("configuring Clerk verifier: %v", err)
+		}
+		s.clerkVerifier = verifier
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -165,9 +179,8 @@ func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 	f, err := s.spaFS.Open(path)
 	if err == nil {
 		f.Close()
-		// For index.html with a base path, inject <base href>.
-		if s.basePath != "" && path == "index.html" {
-			s.serveIndexWithBase(w, r)
+		if path == "index.html" {
+			s.serveIndex(w, r)
 			return
 		}
 		s.spaHandler.ServeHTTP(w, r)
@@ -175,18 +188,13 @@ func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// SPA fallback: serve index.html for all routes
-	if s.basePath != "" {
-		s.serveIndexWithBase(w, r)
-		return
-	}
-	r.URL.Path = "/"
-	s.spaHandler.ServeHTTP(w, r)
+	s.serveIndex(w, r)
 }
 
-// serveIndexWithBase reads the embedded index.html, injects a
-// <base href> tag, and rewrites root-relative asset paths so
-// everything resolves correctly behind a reverse proxy subpath.
-func (s *Server) serveIndexWithBase(
+// serveIndex reads the embedded index.html and injects runtime
+// config metadata. When a base path is configured, it also
+// rewrites root-relative asset paths and adds a <base href> tag.
+func (s *Server) serveIndex(
 	w http.ResponseWriter, _ *http.Request,
 ) {
 	f, err := s.spaFS.Open("index.html")
@@ -202,26 +210,36 @@ func (s *Server) serveIndexWithBase(
 			http.StatusInternalServerError)
 		return
 	}
-	html := string(data)
+	page := string(data)
 
-	// Rewrite root-relative asset paths (href="/...", src="/...")
-	// to include the base path prefix so the browser fetches
-	// assets through the reverse proxy.
-	bp := s.basePath
-	html = strings.ReplaceAll(html, `href="/`, `href="`+bp+`/`)
-	html = strings.ReplaceAll(html, `src="/`, `src="`+bp+`/`)
+	runtimeMeta := fmt.Sprintf(
+		`<meta name="agentsview-clerk-publishable-key" content="%s">`,
+		html.EscapeString(s.cfg.ClerkPublishableKey),
+	)
+	page = strings.Replace(
+		page, "<head>", "<head>\n    "+runtimeMeta, 1,
+	)
 
-	// Inject <base href> AFTER rewriting paths so it doesn't
-	// get double-prefixed by the replacement above.
-	baseTag := fmt.Sprintf(
-		`<base href="%s/">`, bp,
-	)
-	html = strings.Replace(
-		html, "<head>", "<head>\n    "+baseTag, 1,
-	)
+	if s.basePath != "" {
+		// Rewrite root-relative asset paths (href="/...", src="/...")
+		// to include the base path prefix so the browser fetches
+		// assets through the reverse proxy.
+		bp := s.basePath
+		page = strings.ReplaceAll(page, `href="/`, `href="`+bp+`/`)
+		page = strings.ReplaceAll(page, `src="/`, `src="`+bp+`/`)
+
+		// Inject <base href> AFTER rewriting paths so it doesn't
+		// get double-prefixed by the replacement above.
+		baseTag := fmt.Sprintf(
+			`<base href="%s/">`, bp,
+		)
+		page = strings.Replace(
+			page, "<head>", "<head>\n    "+baseTag, 1,
+		)
+	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(html))
+	_, _ = w.Write([]byte(page))
 }
 
 // SetPort updates the listen port (for testing).
@@ -245,7 +263,7 @@ func (s *Server) Handler() http.Handler {
 	if bindAll {
 		bindAllIPs = localInterfaceIPs()
 	}
-	h := cspMiddleware(s.cfg.Host, s.cfg.Port, s.cfg.PublicOrigins, bindAllIPs,
+	h := cspMiddleware(s.cfg.Host, s.cfg.Port, s.cfg.PublicOrigins, bindAllIPs, s.cfg.ClerkPublishableKey,
 		s.authMiddleware(
 			hostCheckMiddleware(
 				allowedHosts, bindAll, s.cfg.Port, bindAllIPs,
@@ -285,8 +303,8 @@ func (s *Server) Handler() http.Handler {
 // responses. The policy pins the exact host:port origin so that
 // even if Tauri's compile-time CSP uses a wildcard port, the
 // intersection narrows to the actual runtime port.
-func cspMiddleware(host string, port int, publicOrigins []string, bindAllIPs map[string]bool, next http.Handler) http.Handler {
-	policy := buildCSPPolicy(host, port, publicOrigins, bindAllIPs)
+func cspMiddleware(host string, port int, publicOrigins []string, bindAllIPs map[string]bool, clerkKey string, next http.Handler) http.Handler {
+	policy := buildCSPPolicy(host, port, publicOrigins, bindAllIPs, clerkKey)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, "/api/") {
 			w.Header().Set("Content-Security-Policy", policy)
@@ -306,7 +324,7 @@ func cspMiddleware(host string, port int, publicOrigins []string, bindAllIPs map
 // resolve 'self' to the Go server origin after navigating from
 // tauri://localhost. Public origins and LAN IPs are restricted
 // to connect-src only to limit the script execution surface.
-func buildCSPPolicy(host string, port int, publicOrigins []string, bindAllIPs map[string]bool) string {
+func buildCSPPolicy(host string, port int, publicOrigins []string, bindAllIPs map[string]bool, clerkKey string) string {
 	// serverOrigin is the pinned http origin for the configured
 	// host:port, used in all directives so resources load
 	// correctly regardless of how the webview resolves 'self'.
@@ -369,18 +387,52 @@ func buildCSPPolicy(host string, port int, publicOrigins []string, bindAllIPs ma
 	connectParts = append(connectParts, connectWS...)
 	connectSrc := strings.Join(connectParts, " ")
 
+	// When Clerk is configured, allow its frontend API domain in
+	// script-src, connect-src, style-src, img-src, and frame-src
+	// so the Clerk JS SDK can load and operate.
+	clerkSrc := ""
+	if domain := clerkFrontendDomain(clerkKey); domain != "" {
+		clerkSrc = " https://" + domain
+		connectSrc += clerkSrc
+	}
+
 	return fmt.Sprintf(
 		"default-src %[1]s; "+
-			"script-src %[1]s; "+
+			"script-src %[1]s%[3]s; "+
 			"connect-src %[2]s; "+
-			"img-src %[1]s data:; "+
-			"style-src %[1]s 'unsafe-inline' https://fonts.googleapis.com; "+
+			"img-src %[1]s data:%[3]s; "+
+			"style-src %[1]s 'unsafe-inline' https://fonts.googleapis.com%[3]s; "+
 			"font-src %[1]s data: https://fonts.gstatic.com; "+
+			"frame-src %[1]s%[3]s; "+
 			"object-src 'none'; "+
 			"base-uri 'none'; "+
 			"frame-ancestors 'none'",
-		resourceSrc, connectSrc,
+		resourceSrc, connectSrc, clerkSrc,
 	)
+}
+
+// clerkFrontendDomain extracts the Clerk frontend API domain from
+// a publishable key. Clerk keys encode the domain as base64 after
+// the "pk_test_" or "pk_live_" prefix. Returns "" if the key is
+// empty or malformed.
+func clerkFrontendDomain(key string) string {
+	if key == "" {
+		return ""
+	}
+	// Strip the "pk_test_" or "pk_live_" prefix.
+	parts := strings.SplitN(key, "_", 3)
+	if len(parts) < 3 {
+		return ""
+	}
+	decoded, err := base64.RawStdEncoding.DecodeString(parts[2])
+	if err != nil {
+		return ""
+	}
+	domain := strings.TrimSuffix(string(decoded), "$")
+	if domain == "" || !strings.Contains(domain, ".") {
+		return ""
+	}
+	return domain
 }
 
 // buildAllowedHosts returns the set of Host header values that

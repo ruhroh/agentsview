@@ -15,6 +15,7 @@
     "e2e": "playwright test"
   },
   "dependencies": {
+    "svelte-clerk": "^1.1.1",
     "@tanstack/virtual-core": "3.13.23",
     "dompurify": "3.3.3",
     "marked": "17.0.5"

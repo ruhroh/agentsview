@@ -71,23 +71,26 @@ type ShareConfig struct {
 
 // Config holds all application configuration.
 type Config struct {
-	Host                 string         `json:"host" toml:"host"`
-	Port                 int            `json:"port" toml:"port"`
-	DataDir              string         `json:"data_dir" toml:"data_dir"`
-	DBPath               string         `json:"-" toml:"-"`
-	PublicURL            string         `json:"public_url,omitempty" toml:"public_url"`
-	PublicOrigins        []string       `json:"public_origins,omitempty" toml:"public_origins"`
-	Proxy                ProxyConfig    `json:"proxy,omitempty" toml:"proxy"`
-	WatchExcludePatterns []string       `json:"watch_exclude_patterns,omitempty" toml:"watch_exclude_patterns"`
-	CursorSecret         string         `json:"cursor_secret" toml:"cursor_secret"`
-	GithubToken          string         `json:"github_token,omitempty" toml:"github_token"`
-	Terminal             TerminalConfig `json:"terminal,omitempty" toml:"terminal"`
-	AuthToken            string         `json:"auth_token,omitempty" toml:"auth_token"`
-	RemoteAccess         bool           `json:"remote_access" toml:"remote_access"`
-	NoBrowser            bool           `json:"no_browser" toml:"no_browser"`
-	PG                   PGConfig       `json:"pg,omitempty" toml:"pg"`
-	Share                ShareConfig    `json:"share,omitempty" toml:"share"`
-	WriteTimeout         time.Duration  `json:"-" toml:"-"`
+	Host                   string         `json:"host" toml:"host"`
+	Port                   int            `json:"port" toml:"port"`
+	DataDir                string         `json:"data_dir" toml:"data_dir"`
+	DBPath                 string         `json:"-" toml:"-"`
+	PublicURL              string         `json:"public_url,omitempty" toml:"public_url"`
+	PublicOrigins          []string       `json:"public_origins,omitempty" toml:"public_origins"`
+	Proxy                  ProxyConfig    `json:"proxy,omitempty" toml:"proxy"`
+	WatchExcludePatterns   []string       `json:"watch_exclude_patterns,omitempty" toml:"watch_exclude_patterns"`
+	CursorSecret           string         `json:"cursor_secret" toml:"cursor_secret"`
+	GithubToken            string         `json:"github_token,omitempty" toml:"github_token"`
+	Terminal               TerminalConfig `json:"terminal,omitempty" toml:"terminal"`
+	AuthToken              string         `json:"auth_token,omitempty" toml:"auth_token"`
+	ClerkPublishableKey    string         `json:"clerk_publishable_key,omitempty" toml:"clerk_publishable_key"`
+	ClerkSecretKey         string         `json:"clerk_secret_key,omitempty" toml:"clerk_secret_key"`
+	ClerkAuthorizedParties []string       `json:"clerk_authorized_parties,omitempty" toml:"clerk_authorized_parties"`
+	RemoteAccess           bool           `json:"remote_access" toml:"remote_access"`
+	NoBrowser              bool           `json:"no_browser" toml:"no_browser"`
+	PG                     PGConfig       `json:"pg,omitempty" toml:"pg"`
+	Share                  ShareConfig    `json:"share,omitempty" toml:"share"`
+	WriteTimeout           time.Duration  `json:"-" toml:"-"`
 
 	// AgentDirs maps each AgentType to its configured
 	// directories. Single-dir agents store a one-element
@@ -305,6 +308,9 @@ func (c *Config) loadFile() error {
 		ResultContentBlockedCategories []string       `toml:"result_content_blocked_categories"`
 		Terminal                       TerminalConfig `toml:"terminal"`
 		AuthToken                      string         `toml:"auth_token"`
+		ClerkPublishableKey            string         `toml:"clerk_publishable_key"`
+		ClerkSecretKey                 string         `toml:"clerk_secret_key"`
+		ClerkAuthorizedParties         []string       `toml:"clerk_authorized_parties"`
 		RemoteAccess                   bool           `toml:"remote_access"`
 		PG                             PGConfig       `toml:"pg"`
 		Share                          ShareConfig    `toml:"share"`
@@ -341,6 +347,17 @@ func (c *Config) loadFile() error {
 	}
 	if file.AuthToken != "" {
 		c.AuthToken = file.AuthToken
+	}
+	if file.ClerkPublishableKey != "" &&
+		c.ClerkPublishableKey == "" {
+		c.ClerkPublishableKey = file.ClerkPublishableKey
+	}
+	if file.ClerkSecretKey != "" && c.ClerkSecretKey == "" {
+		c.ClerkSecretKey = file.ClerkSecretKey
+	}
+	if file.ClerkAuthorizedParties != nil &&
+		c.ClerkAuthorizedParties == nil {
+		c.ClerkAuthorizedParties = file.ClerkAuthorizedParties
 	}
 	c.RemoteAccess = file.RemoteAccess
 	// Merge pg field-by-field so env vars override only
@@ -497,6 +514,17 @@ func (c *Config) loadEnv() {
 	if v := os.Getenv("AGENTSVIEW_SHARE_PUBLISHER"); v != "" {
 		c.Share.Publisher = v
 	}
+	if v := os.Getenv("CLERK_SECRET_KEY"); v != "" {
+		c.ClerkSecretKey = v
+	}
+	if v := os.Getenv("CLERK_PUBLISHABLE_KEY"); v != "" {
+		c.ClerkPublishableKey = v
+	} else if v := os.Getenv("VITE_CLERK_PUBLISHABLE_KEY"); v != "" {
+		c.ClerkPublishableKey = v
+	}
+	if v := os.Getenv("CLERK_AUTHORIZED_PARTIES"); v != "" {
+		c.ClerkAuthorizedParties = splitFlagList(v)
+	}
 }
 
 type stringListFlag []string
@@ -630,6 +658,12 @@ func finalize(cfg *Config) error {
 	if err != nil {
 		return fmt.Errorf("invalid public origins: %w", err)
 	}
+	cfg.ClerkAuthorizedParties, err = normalizePublicOrigins(
+		cfg.ClerkAuthorizedParties,
+	)
+	if err != nil {
+		return fmt.Errorf("invalid clerk authorized parties: %w", err)
+	}
 	if cfg.PublicURL != "" {
 		cfg.PublicOrigins, err = normalizePublicOrigins(
 			append(cfg.PublicOrigins, cfg.PublicURL),
@@ -637,6 +671,12 @@ func finalize(cfg *Config) error {
 		if err != nil {
 			return fmt.Errorf("invalid public url: %w", err)
 		}
+	}
+	if cfg.ClerkSecretKey != "" &&
+		len(cfg.ClerkAuthorizedParties) == 0 {
+		return fmt.Errorf(
+			"clerk_secret_key requires clerk_authorized_parties",
+		)
 	}
 	return nil
 }

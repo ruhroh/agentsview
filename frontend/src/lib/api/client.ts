@@ -34,6 +34,7 @@ import type {
   TrashResponse,
 } from "./types.js";
 import type { SessionActivityResponse } from "./types/session-activity.js";
+import { getClerkPublishableKey } from "../runtime-config.js";
 
 const SERVER_URL_KEY = "agentsview-server-url";
 const AUTH_TOKEN_KEY = "agentsview-auth-token";
@@ -89,7 +90,13 @@ export function isRemoteConnection(): boolean {
   return getServerUrl() !== "";
 }
 
+export function isClerkAuthMode(): boolean {
+  return getClerkPublishableKey() !== "" && !isRemoteConnection();
+}
+
 function authHeaders(init?: RequestInit): RequestInit {
+  if (isClerkAuthMode()) return init ?? {};
+
   const token = getAuthToken();
   if (!token) return init ?? {};
 
@@ -394,11 +401,10 @@ function processFrame(
 /** Watch a session for live updates via SSE.
  *
  * SECURITY NOTE: The native EventSource API does not support custom
- * headers, so the auth token is passed as a query parameter for
- * remote connections. This means the token may appear in browser
- * history and proxy/server access logs. This is an accepted
- * limitation of SSE — switching to a fetch-based streaming
- * approach would avoid this but adds significant complexity.
+ * headers. Legacy cross-origin token-based connections therefore use
+ * a query parameter, which can leak into browser history and proxy
+ * logs. Clerk-backed same-origin deployments stay cookie-based and do
+ * not append a token to the URL.
  */
 export function watchSession(
   sessionId: string,
@@ -406,9 +412,10 @@ export function watchSession(
 ): EventSource {
   const url = `${getBase()}/sessions/${sessionId}/watch`;
   const token = getAuthToken();
-  // EventSource does not support custom headers, so pass the
-  // auth token as a query parameter for remote connections.
-  const fullUrl = token ? `${url}?token=${encodeURIComponent(token)}` : url;
+  const fullUrl =
+    !isClerkAuthMode() && token
+      ? `${url}?token=${encodeURIComponent(token)}`
+      : url;
   const es = new EventSource(fullUrl);
 
   es.addEventListener("session_updated", () => {
