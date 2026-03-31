@@ -91,6 +91,9 @@ func (s *Server) handleDeleteSession(
 		return
 	}
 
+	// Best-effort unshare before trashing.
+	s.bestEffortUnshare(id)
+
 	if err := s.db.SoftDeleteSession(id); err != nil {
 		if handleReadOnly(w, err) {
 			return
@@ -135,6 +138,9 @@ func (s *Server) handlePermanentDeleteSession(
 	w http.ResponseWriter, r *http.Request,
 ) {
 	id := r.PathValue("id")
+
+	// Best-effort unshare before permanent deletion.
+	s.bestEffortUnshare(id)
 
 	// Atomically delete only if the session is in the trash.
 	// This avoids a TOCTOU race between checking deleted_at and

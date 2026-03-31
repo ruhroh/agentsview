@@ -185,3 +185,27 @@ func (s *Store) ReplaceSessionMessages(
 ) error {
 	return db.ErrReadOnly
 }
+
+// RecordShare is not supported in read-only mode.
+func (s *Store) RecordShare(_, _, _ string) error {
+	return db.ErrReadOnly
+}
+
+// RemoveShare is not supported in read-only mode.
+func (s *Store) RemoveShare(_ string) error {
+	return db.ErrReadOnly
+}
+
+// GetShare returns nil.
+func (s *Store) GetShare(
+	_ context.Context, _ string,
+) (*db.SharedSession, error) {
+	return nil, nil
+}
+
+// ListSharedSessionIDs returns an empty slice.
+func (s *Store) ListSharedSessionIDs(
+	_ context.Context,
+) ([]string, error) {
+	return []string{}, nil
+}

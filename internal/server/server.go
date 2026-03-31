@@ -230,6 +230,11 @@ func (s *Server) routes() {
 	s.mux.Handle("DELETE /api/v1/sessions/{id}/star", s.withTimeout(s.handleUnstarSession))
 	s.mux.Handle("POST /api/v1/starred/bulk", s.withTimeout(s.handleBulkStar))
 
+	// Sharing
+	s.mux.Handle("GET /api/v1/shared", s.withTimeout(s.handleListShared))
+	s.mux.Handle("PUT /api/v1/sessions/{id}/share", s.withTimeout(s.handleShareSession))
+	s.mux.Handle("DELETE /api/v1/sessions/{id}/share", s.withTimeout(s.handleUnshareSession))
+
 	// Session management
 	s.mux.Handle("PATCH /api/v1/sessions/{id}/rename", s.withTimeout(s.handleRenameSession))
 	s.mux.Handle("DELETE /api/v1/sessions/{id}", s.withTimeout(s.handleDeleteSession))
