@@ -61,6 +61,12 @@ type Store interface {
 	ListStarredSessionIDs(ctx context.Context) ([]string, error)
 	BulkStarSessions(sessionIDs []string) error
 
+	// Shares (local-only; PG returns ErrReadOnly).
+	RecordShare(sessionID, shareID, serverURL string) error
+	RemoveShare(sessionID string) error
+	GetShare(ctx context.Context, sessionID string) (*SharedSession, error)
+	ListSharedSessionIDs(ctx context.Context) ([]string, error)
+
 	// Pins (local-only; PG returns ErrReadOnly).
 	PinMessage(sessionID string, messageID int64, note *string) (int64, error)
 	UnpinMessage(sessionID string, messageID int64) error
