@@ -552,6 +552,32 @@ export async function bulkStarSessions(
   }
 }
 
+/* Shared */
+
+export async function listShared(): Promise<{ session_ids: string[] }> {
+  return fetchJSON("/shared");
+}
+
+export async function shareSession(id: string): Promise<void> {
+  const res = await fetch(`${getBase()}/sessions/${id}/share`, authHeaders({
+    method: "PUT",
+  }));
+  if (!res.ok) {
+    const body = await res.text();
+    throw new ApiError(res.status, apiErrorMessage(res.status, body));
+  }
+}
+
+export async function unshareSession(id: string): Promise<void> {
+  const res = await fetch(`${getBase()}/sessions/${id}/share`, authHeaders({
+    method: "DELETE",
+  }));
+  if (!res.ok) {
+    const body = await res.text();
+    throw new ApiError(res.status, apiErrorMessage(res.status, body));
+  }
+}
+
 /* Session directory */
 
 export function getSessionDirectory(
