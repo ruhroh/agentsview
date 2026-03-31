@@ -32,11 +32,11 @@ func TestHandlers_Internal_DeadlineExceeded(t *testing.T) {
 		{"ListSessions", s.handleListSessions, false},
 		{"GetSession", s.handleGetSession, false},
 		{"GetMessages", s.handleGetMessages, false},
-		{"GetMinimap", s.handleGetMinimap, false},
 		{"GetStats", s.handleGetStats, false},
 		{"ListProjects", s.handleListProjects, false},
 		{"ListMachines", s.handleListMachines, false},
 		{"Search", s.handleSearch, true},
+		{"GetSessionActivity", s.handleGetSessionActivity, false},
 	}
 
 	for _, tt := range tests {

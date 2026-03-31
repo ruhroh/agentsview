@@ -6,6 +6,8 @@
   import StatusBar from "./lib/components/layout/StatusBar.svelte";
   import SessionList from "./lib/components/sidebar/SessionList.svelte";
   import MessageList from "./lib/components/content/MessageList.svelte";
+  import ActivityMinimap from "./lib/components/content/ActivityMinimap.svelte";
+  import { sessionActivity } from "./lib/stores/sessionActivity.svelte.js";
   import CommandPalette from "./lib/components/command-palette/CommandPalette.svelte";
   import AboutModal from "./lib/components/modals/AboutModal.svelte";
   import ShortcutsModal from "./lib/components/modals/ShortcutsModal.svelte";
@@ -84,9 +86,15 @@
           messages.reload();
           sessions.refreshActiveSession();
           sessions.loadChildSessions(id);
+          if (ui.activityMinimapOpen) {
+            sessionActivity.reload(id);
+          } else {
+            sessionActivity.invalidate();
+          }
         });
         pins.loadForSession(id);
       } else {
+        sessionActivity.clear();
         messages.clear();
         sessions.childSessions = new Map();
         sync.unwatchSession();
@@ -380,6 +388,11 @@
           session={session}
           onBack={() => sessions.deselectSession()}
         />
+        {#if ui.activityMinimapOpen && sessions.activeSessionId}
+          <ActivityMinimap
+            sessionId={sessions.activeSessionId}
+          />
+        {/if}
         <MessageList bind:this={messageListRef} />
       {:else}
         <AnalyticsPage />

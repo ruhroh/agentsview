@@ -504,6 +504,123 @@ func TestMigration_ResultContentColumn(t *testing.T) {
 	}
 }
 
+func TestMigration_ToolResultEventsTable(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.db")
+
+	d, err := Open(path)
+	requireNoError(t, err, "initial open")
+	insertSession(t, d, "s1", "proj")
+	d.Close()
+
+	conn, err := sql.Open("sqlite3", path)
+	requireNoError(t, err, "raw open")
+	legacyVersion := dataVersion - 1
+	_, err = conn.Exec(fmt.Sprintf(`
+		DROP TABLE tool_result_events;
+		PRAGMA user_version = %d;
+	`, legacyVersion))
+	requireNoError(t, err, "drop tool_result_events")
+
+	var count int
+	err = conn.QueryRow(
+		`SELECT count(*) FROM sqlite_master
+		 WHERE type = 'table' AND name = 'tool_result_events'`,
+	).Scan(&count)
+	requireNoError(t, err, "verify table removed")
+	if count != 0 {
+		t.Fatal("expected tool_result_events table to be absent")
+	}
+	requireNoError(t, conn.Close(), "close legacy db")
+
+	d2, err := Open(path)
+	requireNoError(t, err, "reopen after migration")
+	defer d2.Close()
+
+	requireSessionExists(t, d2, "s1")
+	if !d2.NeedsResync() {
+		t.Fatal("expected NeedsResync()=true after data version bump")
+	}
+
+	err = d2.getReader().QueryRow(
+		`SELECT count(*) FROM sqlite_master
+		 WHERE type = 'table' AND name = 'tool_result_events'`,
+	).Scan(&count)
+	requireNoError(t, err, "verify table exists")
+	if count != 1 {
+		t.Fatal("expected tool_result_events table after reopen")
+	}
+}
+
+func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s-events", "proj")
+
+	err := d.InsertMessages([]Message{
+		{
+			SessionID:  "s-events",
+			Ordinal:    0,
+			Role:       "assistant",
+			Content:    "tool use response",
+			HasToolUse: true,
+			ToolCalls: []ToolCall{
+				{
+					SessionID:           "s-events",
+					ToolName:            "wait",
+					Category:            "Task",
+					ToolUseID:           "call_wait",
+					ResultContentLength: 9,
+					ResultContent:       "latest one",
+					ResultEvents: []ToolResultEvent{
+						{
+							ToolUseID:         "call_wait",
+							AgentID:           "agent-1",
+							SubagentSessionID: "codex:agent-1",
+							Source:            "wait_output",
+							Status:            "completed",
+							Content:           "first result",
+							ContentLength:     len("first result"),
+							Timestamp:         "2026-03-27T10:00:00Z",
+							EventIndex:        0,
+						},
+						{
+							ToolUseID:         "call_wait",
+							AgentID:           "agent-2",
+							SubagentSessionID: "codex:agent-2",
+							Source:            "subagent_notification",
+							Status:            "errored",
+							Content:           "second result",
+							ContentLength:     len("second result"),
+							Timestamp:         "2026-03-27T10:01:00Z",
+							EventIndex:        1,
+						},
+					},
+				},
+			},
+		},
+	})
+	requireNoError(t, err, "InsertMessages")
+
+	msgs, err := d.GetMessages(context.Background(), "s-events", 0, 100, true)
+	requireNoError(t, err, "GetMessages")
+	if len(msgs) != 1 {
+		t.Fatalf("got %d messages, want 1", len(msgs))
+	}
+	if len(msgs[0].ToolCalls) != 1 {
+		t.Fatalf("got %d tool_calls, want 1", len(msgs[0].ToolCalls))
+	}
+	tc := msgs[0].ToolCalls[0]
+	if len(tc.ResultEvents) != 2 {
+		t.Fatalf("got %d result events, want 2", len(tc.ResultEvents))
+	}
+	if tc.ResultEvents[0].AgentID != "agent-1" {
+		t.Errorf("result event 0 agent_id = %q, want %q", tc.ResultEvents[0].AgentID, "agent-1")
+	}
+	if tc.ResultEvents[1].Source != "subagent_notification" {
+		t.Errorf("result event 1 source = %q, want %q", tc.ResultEvents[1].Source, "subagent_notification")
+	}
+}
+
 func TestOpenPreservesDataAtCurrentVersion(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
@@ -1030,32 +1147,6 @@ func TestMessageCRUD(t *testing.T) {
 	}
 	if got[0].Ordinal != 2 {
 		t.Errorf("desc first ordinal = %d, want 2", got[0].Ordinal)
-	}
-}
-
-func TestMinimap(t *testing.T) {
-	d := testDB(t)
-
-	insertSession(t, d, "s1", "p", func(s *Session) {
-		s.MessageCount = 2
-	})
-
-	m2 := asstMsg("s1", 1, "Hi")
-	m2.HasThinking = true
-	m2.HasToolUse = true
-
-	insertMessages(t, d,
-		userMsg("s1", 0, "Hello"),
-		m2,
-	)
-
-	entries, err := d.GetMinimap(context.Background(), "s1")
-	requireNoError(t, err, "GetMinimap")
-	if len(entries) != 2 {
-		t.Fatalf("got %d entries, want 2", len(entries))
-	}
-	if !entries[1].HasThinking {
-		t.Error("expected HasThinking on second entry")
 	}
 }
 
@@ -2141,94 +2232,6 @@ func TestSetCursorSecretDefensiveCopy(t *testing.T) {
 	}
 }
 
-func TestSampleMinimap(t *testing.T) {
-	// Create a helper to generate n entries
-	makeEntries := func(n int) []MinimapEntry {
-		entries := make([]MinimapEntry, 0, n)
-		for i := range n {
-			entries = append(entries, MinimapEntry{
-				Ordinal: i,
-				Role:    "user",
-			})
-		}
-		return entries
-	}
-
-	tests := []struct {
-		name    string
-		entries []MinimapEntry
-		max     int
-		wantLen int
-		// simple check function for ordinals
-		check func([]MinimapEntry) error
-	}{
-		{
-			name:    "SampleDown",
-			entries: makeEntries(10),
-			max:     3,
-			wantLen: 3,
-			check: func(got []MinimapEntry) error {
-				if got[0].Ordinal != 0 || got[1].Ordinal != 4 || got[2].Ordinal != 9 {
-					return fmt.Errorf("ordinals = [%d %d %d], want [0 4 9]",
-						got[0].Ordinal, got[1].Ordinal, got[2].Ordinal)
-				}
-				return nil
-			},
-		},
-		{
-			name:    "ExactSize",
-			entries: makeEntries(5),
-			max:     5,
-			wantLen: 5,
-		},
-		{
-			name:    "SmallerThanMax",
-			entries: makeEntries(3),
-			max:     5,
-			wantLen: 3,
-		},
-		{
-			name:    "Empty",
-			entries: makeEntries(0),
-			max:     5,
-			wantLen: 0,
-		},
-		{
-			name:    "MaxOne",
-			entries: makeEntries(10),
-			max:     1,
-			wantLen: 1,
-			check: func(got []MinimapEntry) error {
-				if got[0].Ordinal != 0 {
-					return fmt.Errorf("ordinal = %d, want 0", got[0].Ordinal)
-				}
-				return nil
-			},
-		},
-		{
-			name:    "MaxZero",
-			entries: makeEntries(10),
-			max:     0,
-			wantLen: 10, // Returns original if max <= 0
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := SampleMinimap(tt.entries, tt.max)
-			if len(got) != tt.wantLen {
-				t.Errorf("len = %d, want %d", len(got), tt.wantLen)
-				return
-			}
-			if tt.check != nil {
-				if err := tt.check(got); err != nil {
-					t.Error(err)
-				}
-			}
-		})
-	}
-}
-
 func TestDeleteSession(t *testing.T) {
 	d := testDB(t)
 
@@ -2464,6 +2467,85 @@ func TestReplaceSessionMessagesReplacesToolCalls(t *testing.T) {
 	}
 	if names[1] != "Write" {
 		t.Errorf("names[1] = %q, want Write", names[1])
+	}
+}
+
+func TestReplaceSessionMessagesReplacesToolResultEvents(t *testing.T) {
+	d := testDB(t)
+
+	insertSession(t, d, "s1", "p")
+
+	m1 := asstMsg("s1", 0, "[Wait]")
+	m1.HasToolUse = true
+	m1.ToolCalls = []ToolCall{{
+		SessionID:           "s1",
+		ToolName:            "wait",
+		Category:            "Other",
+		ToolUseID:           "call_wait",
+		ResultContent:       "old result",
+		ResultContentLength: len("old result"),
+		ResultEvents: []ToolResultEvent{{
+			ToolUseID:     "call_wait",
+			AgentID:       "agent-1",
+			Source:        "wait_output",
+			Status:        "completed",
+			Content:       "old result",
+			ContentLength: len("old result"),
+			EventIndex:    0,
+		}},
+	}}
+	insertMessages(t, d, m1)
+
+	m2 := asstMsg("s1", 0, "[Wait]")
+	m2.HasToolUse = true
+	m2.ToolCalls = []ToolCall{{
+		SessionID:           "s1",
+		ToolName:            "wait",
+		Category:            "Other",
+		ToolUseID:           "call_wait",
+		ResultContent:       "new result",
+		ResultContentLength: len("new result"),
+		ResultEvents: []ToolResultEvent{{
+			ToolUseID:     "call_wait",
+			AgentID:       "agent-1",
+			Source:        "wait_output",
+			Status:        "completed",
+			Content:       "new result",
+			ContentLength: len("new result"),
+			EventIndex:    0,
+		}},
+	}}
+	if err := d.ReplaceSessionMessages("s1", []Message{m2}); err != nil {
+		t.Fatalf("ReplaceSessionMessages: %v", err)
+	}
+
+	msgs, err := d.GetAllMessages(context.Background(), "s1")
+	requireNoError(t, err, "GetAllMessages")
+	if len(msgs) != 1 {
+		t.Fatalf("messages len = %d, want 1", len(msgs))
+	}
+	if len(msgs[0].ToolCalls) != 1 {
+		t.Fatalf("tool calls len = %d, want 1", len(msgs[0].ToolCalls))
+	}
+	tc := msgs[0].ToolCalls[0]
+	if tc.ResultContent != "new result" {
+		t.Fatalf("result_content = %q, want %q", tc.ResultContent, "new result")
+	}
+	if len(tc.ResultEvents) != 1 {
+		t.Fatalf("result events len = %d, want 1", len(tc.ResultEvents))
+	}
+	if tc.ResultEvents[0].Content != "new result" {
+		t.Fatalf("event content = %q, want %q", tc.ResultEvents[0].Content, "new result")
+	}
+
+	var count int
+	err = d.Reader().QueryRow(
+		"SELECT COUNT(*) FROM tool_result_events WHERE session_id = ?",
+		"s1",
+	).Scan(&count)
+	requireNoError(t, err, "count tool_result_events")
+	if count != 1 {
+		t.Fatalf("tool_result_events count = %d, want 1", count)
 	}
 }
 
@@ -3431,6 +3513,78 @@ func TestCopyOrphanedDataFrom_WithToolCalls(t *testing.T) {
 	if ordinal != 1 {
 		t.Errorf("tool_call message ordinal = %d, want 1",
 			ordinal)
+	}
+}
+
+func TestCopyOrphanedDataFrom_WithToolResultEvents(t *testing.T) {
+	dir := t.TempDir()
+
+	srcPath := filepath.Join(dir, "old.db")
+	srcDB, err := Open(srcPath)
+	requireNoError(t, err, "Open src")
+	insertSession(t, srcDB, "s1", "proj")
+	insertMessages(t, srcDB,
+		userMsg("s1", 0, "hello"),
+		asstMsg("s1", 1, "waited on child"),
+	)
+	_, err = srcDB.getWriter().Exec(`
+		INSERT INTO tool_calls
+			(message_id, session_id, tool_name, category,
+			 tool_use_id, result_content_length, result_content)
+		SELECT id, session_id, 'wait', 'Other',
+			'call_wait', 23, 'Finished successfully'
+		FROM messages
+		WHERE session_id = 's1' AND ordinal = 1`,
+	)
+	requireNoError(t, err, "insert tool_call")
+	_, err = srcDB.getWriter().Exec(`
+		INSERT INTO tool_result_events
+			(session_id, tool_call_message_ordinal, call_index,
+			 tool_use_id, agent_id, subagent_session_id,
+			 source, status, content, content_length,
+			 timestamp, event_index)
+		VALUES
+			('s1', 1, 0, 'call_wait', 'agent-1', 'codex:agent-1',
+			 'wait_output', 'completed', 'Finished successfully',
+			 23, '2026-03-27T18:00:00Z', 0)`,
+	)
+	requireNoError(t, err, "insert tool_result_event")
+	srcDB.Close()
+
+	dstPath := filepath.Join(dir, "new.db")
+	dstDB, err := Open(dstPath)
+	requireNoError(t, err, "Open dst")
+	defer dstDB.Close()
+
+	count, err := dstDB.CopyOrphanedDataFrom(srcPath)
+	requireNoError(t, err, "CopyOrphanedDataFrom")
+	if count != 1 {
+		t.Fatalf("expected 1 orphaned, got %d", count)
+	}
+
+	msgs, err := dstDB.GetAllMessages(context.Background(), "s1")
+	requireNoError(t, err, "GetAllMessages")
+	if len(msgs) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(msgs))
+	}
+	if len(msgs[1].ToolCalls) != 1 {
+		t.Fatalf("tool calls len = %d, want 1", len(msgs[1].ToolCalls))
+	}
+	tc := msgs[1].ToolCalls[0]
+	if tc.ResultContent != "Finished successfully" {
+		t.Fatalf("result_content = %q, want %q", tc.ResultContent, "Finished successfully")
+	}
+	if len(tc.ResultEvents) != 1 {
+		t.Fatalf("result events len = %d, want 1", len(tc.ResultEvents))
+	}
+	if tc.ResultEvents[0].Source != "wait_output" {
+		t.Fatalf("event source = %q, want %q", tc.ResultEvents[0].Source, "wait_output")
+	}
+	if tc.ResultEvents[0].SubagentSessionID != "codex:agent-1" {
+		t.Fatalf(
+			"subagent_session_id = %q, want %q",
+			tc.ResultEvents[0].SubagentSessionID, "codex:agent-1",
+		)
 	}
 }
 

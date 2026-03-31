@@ -28,8 +28,7 @@ type Store interface {
 	// Messages.
 	GetMessages(ctx context.Context, sessionID string, from, limit int, asc bool) ([]Message, error)
 	GetAllMessages(ctx context.Context, sessionID string) ([]Message, error)
-	GetMinimap(ctx context.Context, sessionID string) ([]MinimapEntry, error)
-	GetMinimapFrom(ctx context.Context, sessionID string, from int) ([]MinimapEntry, error)
+	GetSessionActivity(ctx context.Context, sessionID string) (*SessionActivityResponse, error)
 
 	// Search.
 	HasFTS() bool

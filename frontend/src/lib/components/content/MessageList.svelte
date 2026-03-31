@@ -18,6 +18,7 @@
   } from "../../utils/content-parser.js";
   import { isSystemMessage } from "../../utils/messages.js";
   import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
+  import { sessionActivity } from "../../stores/sessionActivity.svelte.js";
   import SessionFindBar from "./SessionFindBar.svelte";
 
   let containerRef: HTMLDivElement | undefined = $state(undefined);
@@ -126,24 +127,70 @@
     };
   }
 
+  function publishVisibleTimestamp() {
+    const v = virtualizer.instance;
+    if (!v) return;
+    const items = v.getVirtualItems();
+    // Skip overscanned items above the viewport.
+    const scrollTop = v.scrollOffset ?? 0;
+    for (const vi of items) {
+      if (vi.end <= scrollTop) continue;
+      const item =
+        displayItemsAsc[
+          ui.sortNewestFirst
+            ? displayItemsAsc.length - 1 - vi.index
+            : vi.index
+        ];
+      if (!item) continue;
+      const ts =
+        item.kind === "message"
+          ? item.message.timestamp
+          : item.timestamp;
+      if (ts) {
+        sessionActivity.firstVisibleTimestamp = ts;
+        return;
+      }
+    }
+    sessionActivity.firstVisibleTimestamp = null;
+  }
+
+  // Recompute visible timestamp when minimap opens or
+  // message content changes (e.g. SSE reload).
+  $effect(() => {
+    if (ui.activityMinimapOpen) {
+      // Track message array so the effect re-runs after
+      // content changes while the minimap is open.
+      void messages.messages.length;
+      publishVisibleTimestamp();
+    }
+  });
+
   function handleScroll() {
     if (!containerRef) return;
     if (scrollRaf !== null) return;
     scrollRaf = requestAnimationFrame(() => {
       scrollRaf = null;
       if (!containerRef) return;
-      const items = virtualizer.instance?.getVirtualItems() ?? [];
+      const items =
+        virtualizer.instance?.getVirtualItems() ?? [];
       if (items.length > 0 && messages.hasOlder) {
         const firstVisible = items[0]!.index;
-        const lastVisible = items[items.length - 1]!.index;
+        const lastVisible =
+          items[items.length - 1]!.index;
         const threshold = 30;
         if (
           (ui.sortNewestFirst &&
-            lastVisible >= displayItemsAsc.length - threshold) ||
-          (!ui.sortNewestFirst && firstVisible <= threshold)
+            lastVisible >=
+              displayItemsAsc.length - threshold) ||
+          (!ui.sortNewestFirst &&
+            firstVisible <= threshold)
         ) {
           messages.loadOlder();
         }
+      }
+
+      if (ui.activityMinimapOpen) {
+        publishVisibleTimestamp();
       }
     });
   }

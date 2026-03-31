@@ -1,3 +1,9 @@
+import {
+  SIDEBAR_WIDTH_DEFAULT,
+  SIDEBAR_WIDTH_KEY,
+  clampStoredSidebarWidth,
+} from "../components/layout/sidebar-width.js";
+
 type Theme = "light" | "dark";
 export type MessageLayout = "default" | "compact" | "stream";
 export type TranscriptMode = "normal" | "focused";
@@ -29,6 +35,7 @@ export const ALL_BLOCK_TYPES: BlockType[] = [
 
 const BLOCK_FILTER_KEY = "agentsview-block-filters";
 const TRANSCRIPT_MODE_KEY = "agentsview-transcript-mode";
+const MINIMAP_KEY = "agentsview-activity-minimap";
 
 function readBlockFilters(): Set<BlockType> {
   try {
@@ -126,6 +133,26 @@ function readStoredTranscriptMode(): TranscriptMode {
   return "normal";
 }
 
+function readStoredSidebarWidth(): number {
+  try {
+    return clampStoredSidebarWidth(
+      localStorage?.getItem(SIDEBAR_WIDTH_KEY),
+    );
+  } catch {
+    return SIDEBAR_WIDTH_DEFAULT;
+  }
+}
+
+function readStoredBool(key: string, fallback: boolean): boolean {
+  try {
+    const raw = localStorage?.getItem(key);
+    if (raw === "true") return true;
+    if (raw === "false") return false;
+  } catch {
+    // ignore
+  }
+  return fallback;
+}
 class UIStore {
   theme: Theme = $state(readStoredTheme() || "light");
   sortNewestFirst: boolean = $state(false);
@@ -133,6 +160,7 @@ class UIStore {
   transcriptMode: TranscriptMode = $state(
     readStoredTranscriptMode(),
   );
+  sidebarWidth: number = $state(readStoredSidebarWidth());
   activeModal: ModalType = $state(null);
   selectedOrdinal: number | null = $state(null);
   pendingScrollOrdinal: number | null = $state(null);
@@ -142,6 +170,9 @@ class UIStore {
 
   sidebarOpen: boolean = $state(true);
   isMobileViewport: boolean = $state(false);
+  activityMinimapOpen: boolean = $state(
+    readStoredBool(MINIMAP_KEY, false),
+  );
 
   /** Set of block types currently visible. */
   visibleBlocks: Set<BlockType> = $state(readBlockFilters());
@@ -187,6 +218,17 @@ class UIStore {
       });
 
       $effect(() => {
+        try {
+          localStorage?.setItem(
+            SIDEBAR_WIDTH_KEY,
+            String(this.sidebarWidth),
+          );
+        } catch {
+          // ignore
+        }
+      });
+
+      $effect(() => {
         if (!IS_DESKTOP) return;
         // "zoom" is non-standard but supported in WebKit/Chromium
         (
@@ -197,6 +239,17 @@ class UIStore {
           localStorage?.setItem(
             ZOOM_KEY,
             String(this.zoomLevel),
+          );
+        } catch {
+          // ignore
+        }
+      });
+
+      $effect(() => {
+        try {
+          localStorage?.setItem(
+            MINIMAP_KEY,
+            String(this.activityMinimapOpen),
           );
         } catch {
           // ignore
@@ -306,6 +359,10 @@ class UIStore {
     this.transcriptMode = mode;
   }
 
+  setSidebarWidth(width: number) {
+    this.sidebarWidth = clampStoredSidebarWidth(width);
+  }
+
   selectOrdinal(ordinal: number) {
     this.selectedOrdinal = ordinal;
   }
@@ -350,6 +407,10 @@ class UIStore {
 
   closeSidebar() {
     this.sidebarOpen = false;
+  }
+
+  toggleActivityMinimap() {
+    this.activityMinimapOpen = !this.activityMinimapOpen;
   }
 
   closeAll() {

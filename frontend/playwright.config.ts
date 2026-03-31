@@ -13,6 +13,10 @@ export default defineConfig({
       name: "chromium",
       use: { browserName: "chromium" },
     },
+    {
+      name: "webkit",
+      use: { browserName: "webkit" },
+    },
   ],
   webServer: {
     command: "bash ../scripts/e2e-server.sh",

@@ -165,7 +165,7 @@ func (s *Server) routes() {
 		"GET /api/v1/sessions/{id}/children", s.withTimeout(s.handleGetChildSessions),
 	)
 	s.mux.Handle(
-		"GET /api/v1/sessions/{id}/minimap", s.withTimeout(s.handleGetMinimap),
+		"GET /api/v1/sessions/{id}/activity", s.withTimeout(s.handleGetSessionActivity),
 	)
 	// SSE: Do not use timeout, as this is a long-lived connection.
 	s.mux.HandleFunc(

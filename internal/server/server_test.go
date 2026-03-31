@@ -567,11 +567,6 @@ type messageListResponse struct {
 	Count    int          `json:"count"`
 }
 
-type minimapResponse struct {
-	Entries []db.MinimapEntry `json:"entries"`
-	Count   int               `json:"count"`
-}
-
 type searchResponse struct {
 	Query   string            `json:"query"`
 	Results []db.SearchResult `json:"results"`
@@ -946,103 +941,6 @@ func TestSearch_InvalidParams(t *testing.T) {
 			assertStatus(t, w, http.StatusBadRequest)
 		})
 	}
-}
-
-func TestGetMinimap(t *testing.T) {
-	te := setup(t)
-	te.seedSession(t, "s1", "my-app", 5)
-	te.seedMessages(t, "s1", 5)
-
-	w := te.get(t, "/api/v1/sessions/s1/minimap")
-	assertStatus(t, w, http.StatusOK)
-
-	resp := decode[minimapResponse](t, w)
-	if len(resp.Entries) != 5 {
-		t.Fatalf("expected 5 entries, got %d",
-			len(resp.Entries))
-	}
-	if resp.Entries[0].Role == "" {
-		t.Fatal("minimap should include role")
-	}
-
-	// Verify "content" is not present in raw JSON
-	var raw map[string]any
-	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
-		t.Fatalf("decoding raw JSON: %v", err)
-	}
-	entriesRaw, ok := raw["entries"].([]any)
-	if !ok {
-		t.Fatal("expected entries to be a list")
-	}
-	if len(entriesRaw) > 0 {
-		first, ok := entriesRaw[0].(map[string]any)
-		if !ok {
-			t.Fatal("expected entry to be a map")
-		}
-		if _, ok := first["content"]; ok {
-			t.Fatal("minimap should not include content")
-		}
-	}
-}
-
-func TestGetMinimap_FromOrdinal(t *testing.T) {
-	te := setup(t)
-	te.seedSession(t, "s1", "my-app", 5)
-	te.seedMessages(t, "s1", 5)
-
-	w := te.get(t, "/api/v1/sessions/s1/minimap?from=3")
-	assertStatus(t, w, http.StatusOK)
-
-	resp := decode[minimapResponse](t, w)
-	if len(resp.Entries) != 2 {
-		t.Fatalf("expected 2 entries, got %d",
-			len(resp.Entries))
-	}
-	if got := resp.Entries[0].Ordinal; got != 3 {
-		t.Fatalf("first ordinal = %d, want 3", got)
-	}
-}
-
-func TestGetMinimap_InvalidFrom(t *testing.T) {
-	te := setup(t)
-	te.seedSession(t, "s1", "my-app", 1)
-	te.seedMessages(t, "s1", 1)
-
-	w := te.get(t, "/api/v1/sessions/s1/minimap?from=bad")
-	assertStatus(t, w, http.StatusBadRequest)
-}
-
-func TestGetMinimap_MaxSampled(t *testing.T) {
-	te := setup(t)
-	te.seedSession(t, "s1", "my-app", 10)
-	te.seedMessages(t, "s1", 10)
-
-	w := te.get(t, "/api/v1/sessions/s1/minimap?max=3")
-	assertStatus(t, w, http.StatusOK)
-
-	resp := decode[minimapResponse](t, w)
-	if len(resp.Entries) != 3 {
-		t.Fatalf("expected 3 entries, got %d",
-			len(resp.Entries))
-	}
-	if got := resp.Entries[0].Ordinal; got != 0 {
-		t.Fatalf("first ordinal = %d, want 0", got)
-	}
-	if got := resp.Entries[1].Ordinal; got != 4 {
-		t.Fatalf("second ordinal = %d, want 4", got)
-	}
-	if got := resp.Entries[2].Ordinal; got != 9 {
-		t.Fatalf("third ordinal = %d, want 9", got)
-	}
-}
-
-func TestGetMinimap_InvalidMax(t *testing.T) {
-	te := setup(t)
-	te.seedSession(t, "s1", "my-app", 1)
-	te.seedMessages(t, "s1", 1)
-
-	w := te.get(t, "/api/v1/sessions/s1/minimap?max=0")
-	assertStatus(t, w, http.StatusBadRequest)
 }
 
 func TestSearch_WithResults(t *testing.T) {

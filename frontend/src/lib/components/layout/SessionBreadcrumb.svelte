@@ -20,6 +20,7 @@
 
   import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
   import { messages as messagesStore } from "../../stores/messages.svelte.js";
+  import { ui } from "../../stores/ui.svelte.js";
 
   interface Props {
     session: Session | undefined;
@@ -46,15 +47,27 @@
       .catch(() => {});
   });
 
+  let resolvedSessionDirId: string | null = null;
   $effect(() => {
-    sessionDir = null;
-    if (!session) return;
+    if (!session) {
+      sessionDir = null;
+      resolvedSessionDirId = null;
+      return;
+    }
     const id = session.id;
+    if (id === resolvedSessionDirId) return;
+    sessionDir = null;
     getSessionDirectory(id)
       .then(({ path }) => {
-        if (session?.id === id) sessionDir = path || null;
+        if (session?.id === id) {
+          sessionDir = path || null;
+          resolvedSessionDirId = id;
+        }
       })
-      .catch(() => {});
+      .catch(() => {
+        // Don't cache the ID on failure so the next
+        // session refresh retries the lookup.
+      });
   });
 
   let sessionContextTokens = $derived(session?.peak_context_tokens ?? 0);
@@ -495,6 +508,17 @@
           {/if}
         </button>
         <button
+          class="minimap-btn"
+          class:minimap-btn--active={ui.activityMinimapOpen}
+          title="Activity minimap"
+          onclick={() => ui.toggleActivityMinimap()}
+          aria-label="Toggle activity minimap"
+        >
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M1 14V8h2v6H1zm4 0V2h2v12H5zm4 0V5h2v9H9zm4 0V9h2v5h-2z"/>
+          </svg>
+        </button>
+        <button
           class="find-btn"
           class:find-btn--active={inSessionSearch.isOpen}
           title="Find in session (/)"
@@ -788,6 +812,35 @@
 
   .link-btn--copied {
     color: var(--accent-green, #2ea043);
+  }
+
+  .minimap-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border: none;
+    border-radius: var(--radius-sm, 4px);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    flex-shrink: 0;
+  }
+
+  .minimap-btn:hover {
+    background: var(--bg-surface-hover);
+    color: var(--accent-blue);
+  }
+
+  .minimap-btn--active {
+    color: var(--accent-blue);
+    background: color-mix(
+      in srgb,
+      var(--accent-blue) 12%,
+      transparent
+    );
   }
 
   .find-btn {

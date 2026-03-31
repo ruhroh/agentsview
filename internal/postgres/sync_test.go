@@ -59,6 +59,108 @@ func TestEnsureSchemaIdempotent(t *testing.T) {
 	if err := ps.EnsureSchema(ctx); err != nil {
 		t.Fatalf("second EnsureSchema: %v", err)
 	}
+
+	var eventIndex int
+	err = ps.pg.QueryRowContext(ctx,
+		"SELECT event_index FROM tool_result_events LIMIT 0",
+	).Scan(&eventIndex)
+	if err != nil && err != sql.ErrNoRows {
+		t.Fatalf("tool_result_events schema probe: %v", err)
+	}
+}
+
+func TestEnsureSchemaMigratesLegacySchema(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanPGSchema(t, pgURL)
+	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+
+	pg, err := Open(pgURL, "agentsview", true)
+	if err != nil {
+		t.Fatalf("connecting to pg: %v", err)
+	}
+	defer pg.Close()
+
+	ctx := context.Background()
+
+	// Simulate a 0.16.x schema: create the schema and core
+	// tables but omit tool_result_events.
+	if _, err := pg.ExecContext(ctx,
+		"CREATE SCHEMA IF NOT EXISTS agentsview",
+	); err != nil {
+		t.Fatalf("creating schema: %v", err)
+	}
+	legacyDDL := `
+CREATE TABLE IF NOT EXISTS sync_metadata (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sessions (
+    id                 TEXT PRIMARY KEY,
+    machine            TEXT NOT NULL,
+    project            TEXT NOT NULL,
+    agent              TEXT NOT NULL,
+    first_message      TEXT,
+    display_name       TEXT,
+    created_at         TIMESTAMPTZ,
+    started_at         TIMESTAMPTZ,
+    ended_at           TIMESTAMPTZ,
+    deleted_at         TIMESTAMPTZ,
+    message_count      INT NOT NULL DEFAULT 0,
+    user_message_count INT NOT NULL DEFAULT 0,
+    parent_session_id  TEXT,
+    relationship_type  TEXT NOT NULL DEFAULT '',
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS messages (
+    session_id     TEXT NOT NULL,
+    ordinal        INT NOT NULL,
+    role           TEXT NOT NULL,
+    content        TEXT NOT NULL,
+    timestamp      TIMESTAMPTZ,
+    has_thinking   BOOLEAN NOT NULL DEFAULT FALSE,
+    has_tool_use   BOOLEAN NOT NULL DEFAULT FALSE,
+    content_length INT NOT NULL DEFAULT 0,
+    is_system      BOOLEAN NOT NULL DEFAULT FALSE,
+    PRIMARY KEY (session_id, ordinal),
+    FOREIGN KEY (session_id)
+        REFERENCES sessions(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS tool_calls (
+    id                    BIGSERIAL PRIMARY KEY,
+    session_id            TEXT NOT NULL,
+    tool_name             TEXT NOT NULL,
+    category              TEXT NOT NULL,
+    call_index            INT NOT NULL DEFAULT 0,
+    tool_use_id           TEXT NOT NULL DEFAULT '',
+    input_json            TEXT,
+    skill_name            TEXT,
+    result_content_length INT,
+    result_content        TEXT,
+    subagent_session_id   TEXT,
+    message_ordinal       INT NOT NULL,
+    FOREIGN KEY (session_id)
+        REFERENCES sessions(id) ON DELETE CASCADE
+);`
+	if _, err := pg.ExecContext(ctx, legacyDDL); err != nil {
+		t.Fatalf("creating legacy tables: %v", err)
+	}
+
+	// Verify tool_result_events does not exist yet.
+	if err := CheckSchemaCompat(ctx, pg); err == nil {
+		t.Fatal("expected CheckSchemaCompat to fail on legacy schema")
+	}
+
+	// Run EnsureSchema — should create the missing table.
+	if err := EnsureSchema(ctx, pg, "agentsview"); err != nil {
+		t.Fatalf("EnsureSchema on legacy schema: %v", err)
+	}
+
+	// Now the compat check should pass.
+	if err := CheckSchemaCompat(ctx, pg); err != nil {
+		t.Fatalf(
+			"CheckSchemaCompat after migration: %v", err,
+		)
+	}
 }
 
 func TestPushSingleSession(t *testing.T) {
@@ -299,6 +401,85 @@ func TestPushWithToolCalls(t *testing.T) {
 			"result_content_length = %d, want 42",
 			resultLen,
 		)
+	}
+}
+
+func TestPushWithToolResultEvents(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanPGSchema(t, pgURL)
+	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+
+	local := testDB(t)
+	ps, err := New(
+		pgURL, "agentsview", local,
+		"test-machine", true,
+	)
+	if err != nil {
+		t.Fatalf("creating sync: %v", err)
+	}
+	defer ps.Close()
+
+	ctx := context.Background()
+	if err := ps.EnsureSchema(ctx); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+
+	sess := db.Session{
+		ID:           "sess-events-001",
+		Project:      "test-project",
+		Machine:      "local",
+		Agent:        "codex",
+		MessageCount: 1,
+	}
+	if err := local.UpsertSession(sess); err != nil {
+		t.Fatalf("upsert session: %v", err)
+	}
+	if err := local.InsertMessages([]db.Message{
+		{
+			SessionID:  "sess-events-001",
+			Ordinal:    0,
+			Role:       "assistant",
+			Content:    "tool use response",
+			HasToolUse: true,
+			ToolCalls: []db.ToolCall{
+				{
+					ToolName:  "wait",
+					Category:  "Task",
+					ToolUseID: "call_wait",
+					ResultEvents: []db.ToolResultEvent{
+						{
+							ToolUseID:         "call_wait",
+							AgentID:           "agent-1",
+							SubagentSessionID: "codex:agent-1",
+							Source:            "wait_output",
+							Status:            "completed",
+							Content:           "first result",
+							ContentLength:     len("first result"),
+							Timestamp:         "2026-03-27T10:00:00Z",
+							EventIndex:        0,
+						},
+					},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("insert messages: %v", err)
+	}
+
+	if _, err := ps.Push(ctx, false); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+
+	var count int
+	err = ps.pg.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM tool_result_events WHERE session_id = $1",
+		"sess-events-001",
+	).Scan(&count)
+	if err != nil {
+		t.Fatalf("querying pg tool_result_events: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("pg tool_result_events = %d, want 1", count)
 	}
 }
 

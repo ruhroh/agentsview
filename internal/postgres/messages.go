@@ -85,48 +85,6 @@ func (s *Store) GetAllMessages(
 	return msgs, nil
 }
 
-// GetMinimap returns lightweight metadata for all messages
-// in a session.
-func (s *Store) GetMinimap(
-	ctx context.Context, sessionID string,
-) ([]db.MinimapEntry, error) {
-	return s.GetMinimapFrom(ctx, sessionID, 0)
-}
-
-// GetMinimapFrom returns lightweight metadata for messages
-// starting at ordinal >= from.
-func (s *Store) GetMinimapFrom(
-	ctx context.Context, sessionID string, from int,
-) ([]db.MinimapEntry, error) {
-	rows, err := s.pg.QueryContext(ctx, `
-		SELECT ordinal, role, content_length,
-			has_thinking, has_tool_use
-		FROM messages
-		WHERE session_id = $1 AND ordinal >= $2
-		ORDER BY ordinal ASC`, sessionID, from)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"querying minimap: %w", err,
-		)
-	}
-	defer rows.Close()
-
-	entries := []db.MinimapEntry{}
-	for rows.Next() {
-		var e db.MinimapEntry
-		if err := rows.Scan(
-			&e.Ordinal, &e.Role, &e.ContentLength,
-			&e.HasThinking, &e.HasToolUse,
-		); err != nil {
-			return nil, fmt.Errorf(
-				"scanning minimap entry: %w", err,
-			)
-		}
-		entries = append(entries, e)
-	}
-	return entries, rows.Err()
-}
-
 // SearchSession performs ILIKE substring search within a single
 // session's messages, returning matching ordinals.
 func (s *Store) SearchSession(
@@ -383,6 +341,11 @@ func (s *Store) attachToolCalls(
 			return err
 		}
 	}
+	if err := s.attachToolResultEvents(
+		ctx, msgs, ordToIdx, sessionID, ordinals,
+	); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -446,6 +409,96 @@ func (s *Store) attachToolCallsBatch(
 				msgs[idx].ToolCalls, tc,
 			)
 		}
+	}
+	return rows.Err()
+}
+
+func (s *Store) attachToolResultEvents(
+	ctx context.Context,
+	msgs []db.Message,
+	ordToIdx map[int]int,
+	sessionID string,
+	ordinals []int,
+) error {
+	for i := 0; i < len(ordinals); i += attachToolCallBatchSize {
+		end := min(i+attachToolCallBatchSize, len(ordinals))
+		if err := s.attachToolResultEventsBatch(
+			ctx, msgs, ordToIdx, sessionID, ordinals[i:end],
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) attachToolResultEventsBatch(
+	ctx context.Context,
+	msgs []db.Message,
+	ordToIdx map[int]int,
+	sessionID string,
+	ordinals []int,
+) error {
+	if len(ordinals) == 0 {
+		return nil
+	}
+
+	args := []any{sessionID}
+	phs := make([]string, len(ordinals))
+	for i, ord := range ordinals {
+		args = append(args, ord)
+		phs[i] = fmt.Sprintf("$%d", i+2)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT tool_call_message_ordinal, call_index,
+			COALESCE(tool_use_id, ''),
+			COALESCE(agent_id, ''),
+			COALESCE(subagent_session_id, ''),
+			source, status, content, content_length,
+			timestamp, event_index
+		FROM tool_result_events
+		WHERE session_id = $1
+			AND tool_call_message_ordinal IN (%s)
+		ORDER BY tool_call_message_ordinal, call_index, event_index`,
+		strings.Join(phs, ","))
+
+	rows, err := s.pg.QueryContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("querying tool_result_events: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			msgOrdinal int
+			callIndex  int
+			ev         db.ToolResultEvent
+			ts         *time.Time
+		)
+		if err := rows.Scan(
+			&msgOrdinal, &callIndex,
+			&ev.ToolUseID, &ev.AgentID,
+			&ev.SubagentSessionID,
+			&ev.Source, &ev.Status,
+			&ev.Content, &ev.ContentLength,
+			&ts, &ev.EventIndex,
+		); err != nil {
+			return fmt.Errorf("scanning tool_result_event: %w", err)
+		}
+		if ts != nil {
+			ev.Timestamp = FormatISO8601(*ts)
+		}
+		idx, ok := ordToIdx[msgOrdinal]
+		if !ok {
+			continue
+		}
+		if callIndex < 0 || callIndex >= len(msgs[idx].ToolCalls) {
+			continue
+		}
+		msgs[idx].ToolCalls[callIndex].ResultEvents = append(
+			msgs[idx].ToolCalls[callIndex].ResultEvents,
+			ev,
+		)
 	}
 	return rows.Err()
 }

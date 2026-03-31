@@ -2,7 +2,6 @@ import type {
   SessionPage,
   Session,
   MessagesResponse,
-  MinimapResponse,
   SearchResponse,
   ProjectsResponse,
   MachinesResponse,
@@ -34,6 +33,7 @@ import type {
   PinsResponse,
   TrashResponse,
 } from "./types.js";
+import type { SessionActivityResponse } from "./types/session-activity.js";
 
 const SERVER_URL_KEY = "agentsview-server-url";
 const AUTH_TOKEN_KEY = "agentsview-auth-token";
@@ -171,6 +171,14 @@ export function getChildSessions(
   return fetchJSON(`/sessions/${id}/children`, init);
 }
 
+export function getSessionActivity(
+  sessionId: string,
+): Promise<SessionActivityResponse> {
+  return fetchJSON(
+    `/sessions/${sessionId}/activity`,
+  );
+}
+
 /* Messages */
 
 export interface GetMessagesParams {
@@ -187,20 +195,6 @@ export function getMessages(
   return fetchJSON(
     `/sessions/${sessionId}/messages${buildQuery({ ...params })}`,
     init,
-  );
-}
-
-export interface GetMinimapParams {
-  from?: number;
-  max?: number;
-}
-
-export function getMinimap(
-  sessionId: string,
-  params: GetMinimapParams = {},
-): Promise<MinimapResponse> {
-  return fetchJSON(
-    `/sessions/${sessionId}/minimap${buildQuery({ ...params })}`,
   );
 }
 
