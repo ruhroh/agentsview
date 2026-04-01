@@ -977,6 +977,60 @@ func TestResolvePG_ExpandsBareEnvOnlyForWholeValue(t *testing.T) {
 	}
 }
 
+func TestResolvePG_DefaultsRemoteSSLModeToRequire(t *testing.T) {
+	cfg := Config{
+		PG: PGConfig{
+			URL: "postgres://user:pass@crossover.proxy.rlwy.net:5432/railway",
+		},
+	}
+
+	resolved, err := cfg.ResolvePG()
+	if err != nil {
+		t.Fatalf("ResolvePG: %v", err)
+	}
+
+	want := "postgres://user:pass@crossover.proxy.rlwy.net:5432/railway?sslmode=require"
+	if resolved.URL != want {
+		t.Fatalf("URL = %q, want %q", resolved.URL, want)
+	}
+}
+
+func TestResolvePG_DoesNotOverrideExplicitSSLMode(t *testing.T) {
+	cfg := Config{
+		PG: PGConfig{
+			URL: "postgres://user:pass@crossover.proxy.rlwy.net:5432/railway?sslmode=disable",
+		},
+	}
+
+	resolved, err := cfg.ResolvePG()
+	if err != nil {
+		t.Fatalf("ResolvePG: %v", err)
+	}
+
+	want := "postgres://user:pass@crossover.proxy.rlwy.net:5432/railway?sslmode=disable"
+	if resolved.URL != want {
+		t.Fatalf("URL = %q, want %q", resolved.URL, want)
+	}
+}
+
+func TestResolvePG_DoesNotDefaultLocalSSLMode(t *testing.T) {
+	cfg := Config{
+		PG: PGConfig{
+			URL: "postgres://localhost/test",
+		},
+	}
+
+	resolved, err := cfg.ResolvePG()
+	if err != nil {
+		t.Fatalf("ResolvePG: %v", err)
+	}
+
+	want := "postgres://localhost/test"
+	if resolved.URL != want {
+		t.Fatalf("URL = %q, want %q", resolved.URL, want)
+	}
+}
+
 func TestResolvePG_PreservesLiteralDollarSequencesInURL(t *testing.T) {
 	t.Setenv("PGPASS", "env-secret")
 

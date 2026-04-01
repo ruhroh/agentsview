@@ -938,7 +938,11 @@ func (c *Config) ResolvePG() (PGConfig, error) {
 		if err != nil {
 			return pg, fmt.Errorf("expanding url: %w", err)
 		}
-		pg.URL = expanded
+		normalized, err := normalizePGURL(expanded)
+		if err != nil {
+			return pg, fmt.Errorf("normalizing url: %w", err)
+		}
+		pg.URL = normalized
 	}
 	if pg.Schema == "" {
 		pg.Schema = "agentsview"
@@ -951,6 +955,37 @@ func (c *Config) ResolvePG() (PGConfig, error) {
 		pg.MachineName = h
 	}
 	return pg, nil
+}
+
+func normalizePGURL(raw string) (string, error) {
+	if !strings.HasPrefix(raw, "postgres://") &&
+		!strings.HasPrefix(raw, "postgresql://") {
+		return raw, nil
+	}
+
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("parsing pg uri: %w", err)
+	}
+	if isLocalPGHost(u.Hostname()) {
+		return raw, nil
+	}
+
+	q := u.Query()
+	if q.Get("sslmode") != "" {
+		return raw, nil
+	}
+	q.Set("sslmode", "require")
+	u.RawQuery = q.Encode()
+	return u.String(), nil
+}
+
+func isLocalPGHost(host string) bool {
+	if host == "" || host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 var (
