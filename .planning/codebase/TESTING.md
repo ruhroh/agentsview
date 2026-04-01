@@ -1,416 +1,452 @@
 # Testing Patterns
 
-**Analysis Date:** 2026-03-25
+**Analysis Date:** 2026-03-31
 
 ## Test Framework
 
-**Go:**
-- **Runner:** `testing` (stdlib)
-- **Config:** Makefile targets in `/Users/alin/code/caption/agentsview/Makefile`
-- **Build tag:** `-tags fts5` required for FTS5 full-text search support
-- **Environment:** CGO_ENABLED=1 required (SQLite3 driver needs C compilation)
+**Go Runner:**
+- Standard `testing` package — no third-party test runner
+- `github.com/google/go-cmp/cmp` used for deep equality diffs (imported in `internal/db/db_test.go`)
+- Build tag `fts5` required for FTS5 search tests
+- Build tag `pgtest` required for PostgreSQL integration tests
+- **Environment:** `CGO_ENABLED=1` required (SQLite3 driver needs C compilation)
 
-**TypeScript/Frontend:**
-- **Runner:** Vitest 4.1.0
-- **Assertion Library:** `@vitest/expect` (built-in)
-- **Config:** `frontend/vite.config.ts` includes test configuration with jsdom environment
-- **E2E:** Playwright 1.58.2 with config in `frontend/playwright.config.ts`
+**Frontend Unit Tests:**
+- Vitest 4.1.2 with jsdom environment
+- Config: `frontend/vite.config.ts` (test section)
+- Run via `npm run test` (alias for `vitest run`)
+
+**Frontend E2E Tests:**
+- Playwright 1.58.2
+- Config: `frontend/playwright.config.ts`
+- Browsers: Chromium and WebKit
+- Base URL: `http://127.0.0.1:8090`
+- Web server: `bash ../scripts/e2e-server.sh` — starts a real agentsview binary with test fixtures
 
 **Run Commands:**
 ```bash
-# Go unit tests
-make test       # Run all tests with -v and -count=1
-make test-short # Run only tests marked with -short flag
+make test           # Go unit tests (CGO_ENABLED=1 -tags fts5 ./... -v -count=1)
+make test-short     # Fast tests only (-short flag)
+make test-postgres  # PG integration tests (starts Docker container)
+make e2e            # Playwright E2E tests
+make lint           # golangci-lint
+make vet            # go vet
+```
 
-# PostgreSQL integration tests (requires docker-compose)
-make test-postgres   # Starts PG container, runs tests, leaves container running
-make postgres-down   # Stop the test container
-
-# Frontend tests
-cd frontend && npm run test   # Run vitest
-cd frontend && npm run e2e    # Run Playwright E2E tests
-
-# Code quality
-make vet   # go vet with -tags fts5
-make lint  # golangci-lint (requires installation)
+```bash
+cd frontend && npm run test   # Vitest unit tests
+cd frontend && npm run e2e    # Playwright E2E tests
 ```
 
 ## Test File Organization
 
-**Location:**
-- Go: **colocated with source** - `*.go` and `*_test.go` in same directory
-- TypeScript: **colocated with source** - `*.ts` and `*.test.ts` in same directory; E2E tests separate in `frontend/e2e/`
+**Go:**
+- Co-located with production code: `internal/db/sessions.go` → `internal/db/db_test.go`
+- White-box tests (same package): `package db` — e.g., `internal/db/search_test.go`
+- Black-box tests (external package): `package server_test` — e.g., `internal/server/server_test.go`
+- Internal white-box test helpers named `helpers_internal_test.go`, `deadline_internal_test.go`
+- Shared test helpers in separate `_test.go` files: `internal/db/db_test.go` contains all DB test helpers
 
-**Naming:**
-- Go: `<filename>_test.go` (e.g., `sync_test.go`, `search_test.go`)
-- TypeScript: `<filename>.test.ts` (e.g., `sessions.test.ts`, `content-parser.test.ts`)
-- Playwright E2E: `<feature>.spec.ts` (e.g., `navigation.spec.ts`)
+**Frontend unit tests:**
+- Co-located next to source: `frontend/src/lib/utils/format.ts` → `frontend/src/lib/utils/format.test.ts`
 
-**Structure (by package):**
+**Frontend E2E tests:**
+- Separate directory: `frontend/e2e/`
+- Page objects under: `frontend/e2e/pages/`
+- Spec files: `frontend/e2e/*.spec.ts`
+
+**Structure:**
 ```
-cmd/agentsview/
-├── main.go
-├── sync.go
-└── sync_test.go          # Tests in same package (package main)
-
-internal/db/
-├── db.go
-├── sessions.go
-├── sessions_test.go
-└── search_test.go
-
-frontend/src/lib/stores/
-├── sessions.svelte.js
-├── sessions.test.ts      # Colocated test
-└── messages.test.ts
+internal/
+  db/
+    sessions.go
+    search.go
+    db_test.go          # shared test helpers (testDB, insertSession, etc.)
+    search_test.go      # white-box tests
+    shared_test.go      # share-related tests
+  server/
+    server.go
+    server_test.go      # black-box integration tests (package server_test)
+    helpers_internal_test.go  # white-box helpers (package server)
+    search_test.go      # white-box unit tests (package server)
+  dbtest/
+    dbtest.go           # shared helpers for cross-package DB tests
+frontend/
+  src/lib/utils/
+    format.ts
+    format.test.ts
+  e2e/
+    session-list.spec.ts
+    pages/sessions-page.ts
 ```
 
-## Test Structure
+## Go Test Structure
 
-**Go Table-Driven Tests:**
-```golang
-func TestFunctionName(t *testing.T) {
+**Table-driven tests (standard pattern):**
+```go
+func TestParseIntParam(t *testing.T) {
     tests := []struct {
-        name      string          // Test case name
-        input     string          // Input parameter
-        wantOutput string         // Expected result
-        wantErr   string          // Expected error substring
-        check     func(t *testing.T, result Result) // Optional assertion helper
+        name       string
+        query      string
+        param      string
+        wantVal    int
+        wantOK     bool
+        wantStatus int
     }{
         {
-            name: "description of case",
-            input: "value",
-            wantOutput: "expected",
-            check: func(t *testing.T, result Result) {
-                t.Helper()  // Mark helper to improve error reporting
-                if result.Field != "expected" {
-                    t.Errorf("Field = %q, want %q", result.Field, "expected")
-                }
-            },
+            name:       "absent param returns zero",
+            query:      "",
+            param:      "limit",
+            wantVal:    0,
+            wantOK:     true,
+            wantStatus: http.StatusOK,
         },
+        // ...more cases
     }
 
     for _, tt := range tests {
         t.Run(tt.name, func(t *testing.T) {
-            // Test body
-            result, err := FunctionName(tt.input)
-
-            // Error handling
-            if tt.wantErr != "" {
-                if err == nil {
-                    t.Fatalf("expected error containing %q", tt.wantErr)
-                }
-                if !strings.Contains(err.Error(), tt.wantErr) {
-                    t.Fatalf("error %q missing %q", err, tt.wantErr)
-                }
-                return
-            }
-            if err != nil {
-                t.Fatalf("unexpected error: %v", err)
-            }
-
-            // Assertions
-            if tt.check != nil {
-                tt.check(t, result)
-            }
+            // test body
         })
     }
 }
 ```
 
-**TypeScript/Vitest Tests:**
-```typescript
-import { describe, it, expect, vi, beforeEach } from "vitest";
+**Subtests with t.Parallel():**
+```go
+func TestSearch(t *testing.T) {
+    d := testDB(t)
+    // shared setup
 
-describe("FeatureName", () => {
-    let state: ReturnType<typeof createStore>;
+    t.Run("deduplication: two messages in same session", func(t *testing.T) {
+        // subtests may or may not call t.Parallel()
+    })
+}
 
-    beforeEach(() => {
-        vi.clearAllMocks();
-        // Setup
-        state = createStore();
-    });
-
-    describe("functionality", () => {
-        it("should do something", () => {
-            state.action();
-            expect(state.value).toBe(expected);
-        });
-
-        it("should handle error case", async () => {
-            const result = await functionThatThrows();
-            expect(result).toThrow(Error);
-        });
-    });
-});
+// Top-level tests that are independent call t.Parallel():
+func TestSearchEmptyQueryGuard(t *testing.T) {
+    t.Parallel()
+    // ...
+}
 ```
 
-**Playwright E2E Tests:**
-```typescript
-import { test, expect } from "@playwright/test";
+**Assertion helpers pattern:**
+- `require*` helpers call `t.Fatal` (stop test on failure)
+- `assert*` helpers call `t.Error` (continue test on failure)
+- All helpers call `t.Helper()` as first line
+- Defined in `internal/db/db_test.go` and `internal/server/helpers_internal_test.go`
 
-test.describe("Feature", () => {
-    test.beforeEach(async ({ page }) => {
-        await page.goto("/");
-    });
+```go
+func requireNoError(t *testing.T, err error, msg string) {
+    t.Helper()
+    if err != nil {
+        t.Fatalf("%s: %v", msg, err)
+    }
+}
 
-    test("should navigate with keyboard", async ({ page }) => {
-        await page.keyboard.press("]");
-        expect(page.url()).toContain("/session/");
-    });
-});
+func assertRecorderStatus(t *testing.T, w *httptest.ResponseRecorder, code int) {
+    t.Helper()
+    if w.Code != code {
+        t.Fatalf("expected status %d, got %d: %s", code, w.Code, w.Body.String())
+    }
+}
+```
+
+## Database Test Helpers
+
+**`testDB(t)` — creates an isolated SQLite instance:**
+```go
+func testDB(t *testing.T) *DB {
+    t.Helper()
+    dir := t.TempDir()
+    path := filepath.Join(dir, "test.db")
+    d, err := Open(path)
+    requireNoError(t, err, "opening test db")
+    t.Cleanup(func() { d.Close() })
+    return d
+}
+```
+
+Used within `internal/db` package. For cross-package tests, use `dbtest.OpenTestDB(t)` from `internal/dbtest/dbtest.go`.
+
+**`insertSession` — creates a session with functional option overrides:**
+```go
+func insertSession(
+    t *testing.T, d *DB, id, project string,
+    opts ...func(*Session),
+) {
+    t.Helper()
+    s := Session{
+        ID:           id,
+        Project:      project,
+        Machine:      defaultMachine,
+        Agent:        defaultAgent,
+        MessageCount: 1,
+    }
+    for _, opt := range opts {
+        opt(&s)
+    }
+    if err := d.UpsertSession(s); err != nil {
+        t.Fatalf("insertSession %s: %v", id, err)
+    }
+}
+
+// Usage:
+insertSession(t, d, "s1", "proj-a", func(s *Session) {
+    s.Agent = "claude"
+    s.StartedAt = Ptr("2024-01-01T10:00:00Z")
+})
+```
+
+**Message factory helpers:**
+```go
+func userMsg(sid string, ordinal int, content string) Message { ... }
+func asstMsg(sid string, ordinal int, content string) Message { ... }
+func userMsgAt(sid string, ordinal int, content, ts string) Message { ... }
+func asstMsgAt(sid string, ordinal int, content, ts string) Message { ... }
+```
+
+**Cross-package helpers in `internal/dbtest/dbtest.go`:**
+- `dbtest.OpenTestDB(t)` — open temp SQLite DB
+- `dbtest.SeedSession(t, d, id, project, opts...)` — same functional-option pattern
+- `dbtest.SeedMessages(t, d, msgs...)` — insert messages with fatal on error
+- `dbtest.UserMsg(sid, ordinal, content)` / `dbtest.AsstMsg(...)` — message builders
+- `dbtest.Ptr[T](v T)` — generic pointer helper
+
+**FTS guard:**
+```go
+func requireFTS(t *testing.T, d *DB) {
+    t.Helper()
+    if !d.HasFTS() {
+        t.Skip("no FTS support")
+    }
+}
+```
+
+## HTTP Handler Test Helpers
+
+Defined in `internal/server/helpers_internal_test.go` (white-box, `package server`):
+
+**`testServer(t, writeTimeout, opts...)` — full server with real DB:**
+```go
+func testServer(t *testing.T, writeTimeout time.Duration, opts ...Option) *Server {
+    t.Helper()
+    dir := t.TempDir()
+    dbPath := filepath.Join(dir, "test.db")
+    database, err := db.Open(dbPath)
+    // ...
+    t.Cleanup(func() { database.Close() })
+    return New(cfg, database, opts...)
+}
+```
+
+**`newTestRequest(t, query)` — lightweight GET request helper:**
+```go
+func newTestRequest(t *testing.T, query string) (*httptest.ResponseRecorder, *http.Request) {
+    // returns recorder + httptest.NewRequest
+}
+```
+
+**`testEnv` — full integration test environment (black-box, `package server_test`):**
+```go
+type testEnv struct {
+    srv     *server.Server
+    handler http.Handler
+    db      *db.DB
+    dataDir string
+}
+
+func setup(t *testing.T, opts ...setupOption) *testEnv { ... }
+func (te *testEnv) seedSession(t *testing.T, id, project string, msgCount int, opts ...func(*db.Session))
+func (te *testEnv) seedMessages(t *testing.T, sessionID string, count int, mods ...func(i int, m *db.Message))
+func (te *testEnv) listenAndServe(t *testing.T) string // starts real server, returns base URL
+```
+
+**`setupOption` functional options for `setup()`:**
+```go
+func withWriteTimeout(d time.Duration) setupOption { ... }
+func withPublicOrigins(origins ...string) setupOption { ... }
+func withPublicURL(url string) setupOption { ... }
 ```
 
 ## Mocking
 
 **Go:**
-- **Approach:** Interface-based mocking using embedded types
-- **Pattern:** Create a spy struct that embeds the interface and overrides needed methods
-
-**Example from `internal/server/search_test.go`:**
-```golang
+- No mocking framework; mocks are hand-written structs implementing the `db.Store` interface
+- Example spy pattern from `internal/server/search_test.go`:
+```go
 type searchSpy struct {
-    db.Store                    // Embed interface to satisfy it
-    filter   db.SearchFilter    // Capture arguments
+    db.Store
+    filter db.SearchFilter
 }
-
 func (s *searchSpy) HasFTS() bool { return true }
-
-func (s *searchSpy) Search(
-    _ context.Context, f db.SearchFilter,
-) (db.SearchPage, error) {
-    s.filter = f  // Capture for assertion
+func (s *searchSpy) Search(_ context.Context, f db.SearchFilter) (db.SearchPage, error) {
+    s.filter = f
     return db.SearchPage{}, nil
 }
 ```
 
-**TypeScript:**
-- **Framework:** `vi.mock()` from vitest
-- **Pattern:** Mock modules at module level, use `vi.mocked()` to access mocked functions
+**TypeScript (Vitest):**
+- `vi.mock("../api/client.js", () => ({...}))` — full module mock
+- `vi.fn()` for individual function mocks
+- `vi.stubGlobal("fetch", vi.fn().mockResolvedValue({...}))` — global stub for fetch
+- `vi.mocked(api.listSessions).mockResolvedValue({...})` — typed mock return values
+- `vi.clearAllMocks()` in `beforeEach` to reset state between tests
 
-**Example from `frontend/src/lib/stores/sessions.test.ts`:**
-```typescript
-vi.mock("../api/client.js", () => ({
-    listSessions: vi.fn(),
-    getSession: vi.fn(),
-    getProjects: vi.fn(),
-}));
+**What to mock:**
+- Go: mock `db.Store` interface for server handler tests that don't need real DB
+- TypeScript: mock `../api/client.js` module in store tests; mock `fetch` globally in API client tests
 
-beforeEach(() => {
-    vi.clearAllMocks();
-    vi.mocked(api.listSessions).mockResolvedValue({
-        sessions: [],
-        total: 0,
-    });
-});
-```
-
-## What to Mock
-
-**In Go:**
-- ✓ Database operations via `db.Store` interface (use test database or spy)
-- ✓ External HTTP calls via client interfaces
-- ✓ File system operations via abstractions
-- ✗ Standard library packages (avoid if possible)
-- ✗ Internal package functions (test real implementation)
-
-**In TypeScript:**
-- ✓ HTTP API client functions
-- ✓ External service dependencies
-- ✓ Async operations that require specific behavior
-- ✗ Store internal state (test real state mutations)
-- ✗ Utility functions (test with real implementations)
+**What NOT to mock:**
+- Go: prefer real `testDB(t)` over mocking for database logic tests — tests real SQL
+- TypeScript: do not mock the module under test; mock only its external dependencies
 
 ## Fixtures and Factories
 
-**Go Test Helpers:**
-- **Location:** Inline in test files or in test helper packages
-- **Pattern:** Helper functions prefixed with `test` (e.g., `testDB(t)`, `testConfig()`)
-- **Temp directories:** Use `t.TempDir()` for isolated file system access (see `cmd/agentsview/sync_test.go`)
-- **Database:** Use `testDB(t)` to create isolated SQLite database for each test
+**Go test data:**
+- Timestamp constants defined in `internal/db/db_test.go`:
+```go
+const (
+    defaultMachine = "local"
+    defaultAgent   = "claude"
+    tsZero    = "2024-01-01T00:00:00Z"
+    tsHour1   = "2024-01-01T01:00:00Z"
+    tsMidYear = "2024-06-01T10:00:00Z"
+)
+```
 
-**TypeScript Helpers:**
-- **Helpers:** Defined as functions in test files (e.g., `mockListSessions()`, `mockGetProjects()` in `sessions.test.ts`)
-- **Location:** Colocated with test file
-- **Data:** Test fixtures defined as inline objects or helper functions that return test data
-
-## Async Testing
-
-**Go:**
-- Use goroutines with `sync.WaitGroup` to test concurrent code
-- Use `time.Sleep()` sparingly; prefer channels or condition variables
-- Test timeout handling with context.WithTimeout
-
-**TypeScript:**
+**TypeScript test factories:**
+- Local factory functions within test files, e.g.:
 ```typescript
-it("should handle async operations", async () => {
-    const result = await asyncFunction();
-    expect(result).toBe(expected);
-});
-
-it("should reject on error", async () => {
-    await expect(asyncFunction()).rejects.toThrow("error message");
-});
-```
-
-## Error Testing
-
-**Go:**
-- Check error presence with `if err != nil`
-- Match error substrings with `strings.Contains(err.Error(), substring)`
-- Use `errors.Is()` for wrapped errors that match a sentinel
-
-**Example from `internal/server/search_test.go`:**
-```golang
-if tt.wantErr != "" {
-    if err == nil {
-        t.Fatalf("expected error containing %q", tt.wantErr)
-    }
-    if !strings.Contains(err.Error(), tt.wantErr) {
-        t.Fatalf("error %q missing %q", err, tt.wantErr)
-    }
-    return
-}
-if err != nil {
-    t.Fatalf("unexpected error: %v", err)
+function makeMsg(overrides: Partial<Message> & { content: string }): Message {
+    const defaults: Message = { id: 1, session_id: "s1", ordinal: 0, ... };
+    return { ...defaults, ...overrides };
 }
 ```
 
-**TypeScript:**
-- Use `expect().toThrow()` for thrown errors
-- Use `expect().rejects` for rejected promises
+**E2E test fixtures:**
+- Real session data injected via `cmd/testfixture/main.go`
+- Server started by `scripts/e2e-server.sh` with fixture data
+- Fixed session counts declared as constants in spec files:
+```typescript
+const TOTAL_SESSIONS = 8;
+const ALPHA_SESSIONS = 2;
+```
 
 ## Coverage
 
-**Requirements:**
-- No explicit coverage % enforced in CI
-- New tests required for all features and bug fixes (per CLAUDE.md)
-- Focus on critical paths, error cases, and integration points
+**Requirements:** No enforced coverage target.
 
-**View Coverage:**
+**View coverage:**
 ```bash
-# Go coverage
-go test -tags fts5 -cover ./...
-go test -tags fts5 -coverprofile=coverage.out ./...
+CGO_ENABLED=1 go test -tags fts5 ./... -coverprofile=coverage.out
 go tool cover -html=coverage.out
-
-# Frontend coverage (not configured by default)
-# Can be added to vitest.config.ts coverage settings
 ```
 
 ## Test Types
 
-**Unit Tests:**
-- **Scope:** Individual functions or methods
-- **Approach:** Table-driven tests in Go, vitest describe/it in TypeScript
-- **Isolation:** Mock external dependencies, use test doubles for interfaces
-- **Example:** `TestValidateSort`, `TestPrepareFTSQuery` in `internal/server/search_test.go`
+**Go unit tests:**
+- Scope: single function or small group of related functions
+- Use `testDB(t)` for any test touching SQLite
+- Use `httptest.NewRecorder()` + `httptest.NewRequest()` for handler tests without a full server
+- Table-driven with meaningful `name` fields
 
-**Integration Tests:**
-- **Scope:** Multiple components working together
-- **Approach:** Use real database (test db in tempdir), real file system
-- **Location:** In same test file as unit tests, marked with comments or separated
-- **Example:** Parser tests with real JSONL files, sync engine tests with real DB
+**Go integration tests:**
+- Scope: full HTTP request → handler → database → response cycle
+- Use `testEnv` with `setup(t)` for full server wiring
+- Some tests use `listenAndServe(t)` for real TCP connection tests (CORS, bind checks)
 
-**PostgreSQL Integration Tests:**
-- **Setup:** Requires real PostgreSQL via docker-compose or manual instance
-- **Build tag:** `-tags pgtest` in addition to `fts5`
-- **Connection:** TEST_PG_URL env var specifies database
-- **Cleanup:** Tests create/drop schema automatically; use dedicated database
-- **Run:** `make test-postgres` handles container lifecycle
+**PostgreSQL integration tests:**
+- Build tag: `pgtest`
+- Require `TEST_PG_URL` environment variable
+- Run with `make test-postgres` (auto-starts Docker container)
+- Tests create/drop `agentsview` schema — use a dedicated test database
 
-**E2E Tests:**
-- **Framework:** Playwright 1.58.2 in `frontend/e2e/`
-- **Scope:** Full user workflows (navigation, interactions, state)
-- **Setup:** Playwright config starts agentsview server automatically on port 8090
-- **Browser:** Chromium only (configured in `frontend/playwright.config.ts`)
-- **Example:** `frontend/e2e/navigation.spec.ts` tests keyboard navigation between sessions
+**Frontend unit tests (Vitest):**
+- Scope: single utility function, store, or component
+- jsdom environment for DOM APIs
+- No network — all HTTP mocked via `vi.mock` or `vi.stubGlobal("fetch", ...)`
+
+**Frontend E2E tests (Playwright):**
+- Scope: full user flows in a real browser against a running server
+- Page Object Model: `frontend/e2e/pages/sessions-page.ts` encapsulates selectors
+- Two browsers: Chromium and WebKit
+- Server auto-started by `webServer` config in `playwright.config.ts`
 
 ## Common Patterns
 
-**Parallel Tests (Go):**
-- Use `t.Parallel()` in test functions to enable parallel test execution
-- Example: `search_test.go` marks tests with `t.Parallel()`
-- Caveat: Database tests should not use parallelism (see database test setup)
-
-**Test Isolation (Go):**
-```golang
-func TestSomething(t *testing.T) {
-    t.Parallel()
-
-    // Use temporary directory for file operations
-    tempDir := t.TempDir()
-
-    // Use isolated database connection
-    db := testDB(t)
-    defer db.Close()
-
-    // Test code here
+**Async error handling in Go tests:**
+```go
+page, err := d.Search(context.Background(), SearchFilter{
+    Query: "alpha", Limit: 10,
+})
+if err != nil {
+    t.Fatalf("Search: %v", err)
 }
 ```
 
-**Helper Functions with t.Helper():**
-```golang
-func expectError(t *testing.T, got error, want string) {
-    t.Helper()  // Mark as helper to improve error location reporting
-    if !strings.Contains(got.Error(), want) {
-        t.Errorf("error %q missing %q", got, want)
+**Context cancellation testing:**
+```go
+func canceledCtx() context.Context {
+    ctx, cancel := context.WithCancel(context.Background())
+    cancel()
+    return ctx
+}
+
+func requireCanceledErr(t *testing.T, err error) {
+    t.Helper()
+    if !errors.Is(err, context.Canceled) {
+        t.Errorf("expected context.Canceled, got: %v", err)
     }
 }
-
-// In test:
-expectError(t, err, "expected message")
 ```
 
-**Mock Function Verification (TypeScript):**
-```typescript
-// Verify mock was called with specific arguments
-expect(api.listSessions).toHaveBeenLastCalledWith(
-    expect.objectContaining({ project: "myproj" })
-);
-```
+**Parallel sub-tests with shared setup:**
+```go
+func TestSearchSession(t *testing.T) {
+    t.Parallel()
+    d := testDB(t)
+    insertSession(t, d, "s1", "proj")
+    insertMessages(t, d, /* many messages */)
 
-**Before/After Setup:**
+    tests := []struct { name, sessionID, query string; want []int }{ ... }
 
-Go: No built-in before/after; use helper functions or setUp code at test start:
-```golang
-func TestSuite(t *testing.T) {
-    // Setup
-    db := testDB(t)
-    defer db.Close()  // Cleanup via defer
-
-    // Test body
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            t.Parallel() // safe because d is read-only in subtests
+            got, err := d.SearchSession(context.Background(), tt.sessionID, tt.query)
+            // assertions
+        })
+    }
 }
 ```
 
-TypeScript: Use `beforeEach`/`afterEach`:
+**Vitest parameterized tests:**
 ```typescript
-beforeEach(() => {
-    vi.clearAllMocks();
-    mockListSessions();
-});
-
-afterEach(() => {
-    // Additional cleanup if needed
+it.each([
+    ["case description", input, expected],
+    // ...
+])("%s", (_name, input, expected) => {
+    expect(sanitizeSnippet(input)).toBe(expected);
 });
 ```
 
-## Testing Best Practices
+**Playwright page object usage:**
+```typescript
+test.describe("Session list", () => {
+    let sp: SessionsPage;
 
-**Do:**
-- Write test cases for edge cases and error conditions
-- Use descriptive test case names that explain what is being tested
-- Isolate tests (no shared state between test functions)
-- Use table-driven tests for parameter variations
-- Clear mocks between tests
+    test.beforeEach(async ({ page }) => {
+        sp = new SessionsPage(page);
+        await sp.goto();
+    });
 
-**Don't:**
-- Write tests that depend on execution order
-- Share test data across test functions
-- Mock more than necessary
-- Test private implementation details (test behavior instead)
-- Commit tests with `t.Skip()` or skipped test suites
+    test("sessions load and display", async () => {
+        await expect(sp.sessionItems).toHaveCount(TOTAL_SESSIONS);
+    });
+});
+```
 
 ---
 
-*Testing analysis: 2026-03-25*
+*Testing analysis: 2026-03-31*

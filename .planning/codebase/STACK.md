@@ -1,124 +1,117 @@
 # Technology Stack
 
-**Analysis Date:** 2026-03-25
+**Analysis Date:** 2026-03-31
 
 ## Languages
 
 **Primary:**
-- Go 1.25.5 - Backend server, CLI, sync engine, PostgreSQL integration
-- TypeScript 5.9.3 - Frontend application logic and type safety
-- JavaScript - Frontend build and utilities
+- Go 1.25.5 - Backend server, sync engine, parsers, HTTP API, CLI
+- TypeScript 5.9.3 - Frontend SPA (strict mode, ESNext, `noUncheckedIndexedAccess`)
 
 **Secondary:**
-- SQL - Database schema and queries (SQLite, PostgreSQL)
-- HTML/CSS - Frontend templates and styling (Svelte components)
+- SQL - SQLite schema (`internal/db/schema.sql`), FTS5 virtual tables, triggers
+- TOML - Primary config format (`~/.agentsview/config.toml`)
 
 ## Runtime
 
 **Environment:**
-- Go 1.25.5 runtime (embedded HTTP server, file watcher, sync orchestration)
-- Node.js 20.19+ (frontend build only, not required at runtime)
-  - Supported: ^20.19 || ^22.12 || >=24
+- Go runtime (CGO required — SQLite uses cgo bindings)
+- Node.js >=20.19 (engines: `^20.19 || ^22.12 || >=24`) for frontend build only
 
 **Package Manager:**
-- Go Modules (go.mod/go.sum) - Backend dependencies
-- npm - Frontend dependencies (no lock file specified in Makefile)
+- Go modules (`go.mod`, `go.sum`)
+- npm with lockfile (`frontend/package-lock.json`) for frontend
+
+**Lockfile:** Present for both (`go.sum`, `frontend/package-lock.json`)
 
 ## Frameworks
 
-**Core Backend:**
-- Standard library (net/http, database/sql, sync, flag, etc.) - HTTP server, database abstraction, concurrency
-- No external web framework (raw http.ServeMux routing)
-
-**Frontend:**
-- Svelte 5.54.0 - Component framework with reactivity
-- Vite 8.0.1 - Development server and build bundler
+**Core:**
+- Svelte 5.55.0 - Frontend SPA component framework
+- `net/http` (stdlib) - HTTP server with `http.ServeMux` (no third-party router)
 
 **Testing:**
-- Go: testify (v1.11.1) for assertions and mocking
-- Frontend: Vitest 4.1.0 with jsdom - Unit tests
-- Playwright 1.58.2 - E2E tests (baseURL: http://127.0.0.1:8090)
+- Vitest 4.1.2 - Frontend unit tests (jsdom environment)
+- Playwright 1.58.2 - E2E browser tests (Chromium + WebKit)
+- `testing` (stdlib) + `github.com/stretchr/testify v1.11.1` - Go unit tests
 
 **Build/Dev:**
-- Makefile - Build orchestration
-- golangci-lint - Go linting and analysis (.golangci.yml at v2)
-- svelte-check 4.4.5 - Svelte type checking
+- Vite 8.0.3 - Frontend build tool and dev server
+- `@sveltejs/vite-plugin-svelte 7.0.0` - Svelte Vite integration
+- Make - Primary build orchestrator (`Makefile`)
+- golangci-lint v2.10.1 - Go linter (local + CI)
+- prek 0.3.6+ - Pre-commit hook manager (`prek.toml`)
 
 ## Key Dependencies
 
-**Critical Backend:**
-- github.com/jackc/pgx/v5 (v5.8.0) - PostgreSQL driver with connection pooling
-- github.com/mattn/go-sqlite3 (v1.14.37) - SQLite3 driver via CGO
-- github.com/fsnotify/fsnotify (v1.9.0) - File system watcher for session directory changes
-- github.com/tidwall/gjson (v1.18.0) - JSON parsing for session file extraction
+**Critical Go:**
+- `github.com/mattn/go-sqlite3 v1.14.37` - CGO SQLite driver; requires `CGO_ENABLED=1` and `-tags fts5` build tag
+- `github.com/jackc/pgx/v5 v5.9.1` - PostgreSQL driver (optional PG sync feature)
+- `github.com/clerk/clerk-sdk-go/v2 v2.5.1` - Clerk JWT verification for remote auth (`internal/server/clerk.go`)
+- `github.com/BurntSushi/toml v1.6.0` - Config file parsing (`internal/config/config.go`)
+- `github.com/fsnotify/fsnotify v1.9.0` - Cross-platform file system watcher for session directory sync
+- `github.com/tidwall/gjson v1.18.0` - JSON path extraction (in `go.mod`)
+- `github.com/google/shlex v0.0.0-20191202100458` - Shell-style string splitting
+- `golang.org/x/mod v0.34.0` - Go module version utilities
 
-**Infrastructure:**
-- github.com/BurntSushi/toml (v1.6.0) - Configuration file parsing
-- github.com/google/shlex (v0.0.0-20191202100458-e7afc7fbc510) - Shell argument parsing for terminal launching
-- golang.org/x/mod (v0.34.0) - Module version parsing utilities
+**Critical Frontend:**
+- `svelte-clerk ^1.1.1` - Clerk auth UI components (`ClerkProvider`, `SignIn`, `ClerkLoaded`) in `frontend/src/Root.svelte`
+- `@tanstack/virtual-core 3.13.23` - Virtualized list rendering for session/message lists
+- `dompurify 3.3.3` - HTML sanitization for rendered markdown content
+- `marked 17.0.5` - Markdown-to-HTML renderer for message content
 
-**Frontend:**
-- @tanstack/virtual-core (3.13.23) - Virtualization for long message lists
-- dompurify (3.3.3) - XSS prevention for rendered content
-- marked (17.0.4) - Markdown parsing
-- @sveltejs/vite-plugin-svelte (7.0.0) - Svelte integration with Vite
+**Testing Only:**
+- `github.com/google/go-cmp v0.7.0` - Deep equality assertions in Go tests (`internal/db/db_test.go`)
+- `github.com/stretchr/testify v1.11.1` - Go test assertions and require helpers
 
 ## Configuration
 
-**Environment:**
-Session discovery via directory configuration:
-- `AGENT_VIEWER_DATA_DIR` - Data directory for SQLite DB and cache (default: ~/.config/agentsview)
-- `CLAUDE_PROJECTS_DIR` - Claude Code session files
-- `CODEX_SESSIONS_DIR` - Codex session files
-- `COPILOT_DIR` - Copilot CLI session files
-- `GEMINI_DIR` - Gemini CLI session files
-- `OPENCODE_DIR` - OpenCode session files
-- `AMP_DIR` - Amp session files
-
-Server and feature flags via CLI:
-- `-host` (default 127.0.0.1) - HTTP server bind address
-- `-port` (default 8080) - HTTP server port
-- `-public-url` - For hostname/proxy access
-- `-public-origin` - Trusted browser origin for CORS
-- `-proxy` - Managed reverse proxy mode (caddy)
-- `-tls-cert`, `-tls-key` - HTTPS certificate paths
-- `-no-browser` - Disable auto-launch
+**Environment Variables:**
+- `AGENT_VIEWER_DATA_DIR` - Data directory override (default: `~/.agentsview/`)
+- `CLAUDE_PROJECTS_DIR` - Override Claude session dir
+- `CODEX_SESSIONS_DIR` - Override Codex session dir
+- `COPILOT_DIR` - Override Copilot session dir
+- `GEMINI_DIR` - Override Gemini session dir
+- `OPENCODE_DIR` - Override OpenCode session dir
+- `CURSOR_PROJECTS_DIR` - Override Cursor session dir
+- `AMP_DIR` - Override Amp session dir
+- `ZENCODER_DIR`, `IFLOW_DIR`, `VSCODE_COPILOT_DIR`, `PI_DIR`, `OPENCLAW_DIR`, `KIMI_DIR`
+- `AGENTSVIEW_PG_URL` - PostgreSQL connection URL
+- `AGENTSVIEW_PG_SCHEMA` - PostgreSQL schema name
+- `AGENTSVIEW_PG_MACHINE` - Machine name for PG multi-machine sync
+- `AGENTSVIEW_SHARE_URL`, `AGENTSVIEW_SHARE_TOKEN`, `AGENTSVIEW_SHARE_PUBLISHER`
+- `CLERK_SECRET_KEY` - Backend Clerk secret for JWT verification
+- `CLERK_PUBLISHABLE_KEY` / `VITE_CLERK_PUBLISHABLE_KEY` - Frontend Clerk key (baked into build at compile time)
+- `CLERK_AUTHORIZED_PARTIES` - Comma-separated allowed origins for Clerk azp validation
+- `PORT` - HTTP listen port (Docker/Railway)
+- `RAILWAY_PUBLIC_DOMAIN` - Auto-set public URL on Railway deployments
 
 **Config File:**
-- Location: `~/.config/agentsview/config.toml` (TOML format)
-- Contains: host, port, auth tokens, PostgreSQL connection, proxy settings, terminal preferences
-- Migration from JSON legacy format supported
+- `~/.agentsview/config.toml` (primary, auto-migrated from legacy `config.json`)
+- Parsed by `internal/config/config.go` via `BurntSushi/toml`
+- Layer order: defaults < config file < env vars < CLI flags
 
-**Build Configuration:**
-- `.golangci.yml` - Linter configuration (fts5 build tag required)
-- `frontend/tsconfig.json` - TypeScript configuration
-- `frontend/vite.config.ts` - Build output to `dist/`, dev proxy to :8080
-- `frontend/svelte.config.js` - Svelte preprocessing with Vite plugin
-- `frontend/playwright.config.ts` - E2E test timeout: 20s, baseURL: http://127.0.0.1:8090
+**Build:**
+- Mandatory: `CGO_ENABLED=1 -tags fts5` for SQLite FTS5 support
+- Frontend baked into binary via `//go:embed` in `internal/web/dist/`
+- LDFLAGS inject `version`, `commit`, `buildDate` at build time
 
 ## Platform Requirements
 
 **Development:**
-- Go 1.25.5 with CGO_ENABLED=1 (sqlite3 driver requires C compilation)
-- Node.js 20.19+ for frontend build
-- Build tags: `-tags fts5` for SQLite full-text search
-
-**Build Requirements:**
-- Go compiler with CGO support
-- C compiler (gcc/clang)
-- SQLite3 development headers
+- Go 1.25.5+ with CGO enabled
+- C compiler (gcc/clang) for sqlite3 CGO binding
+- Node.js >=20.19 for frontend development
+- Optional: golangci-lint, prek, Docker (for PG integration tests)
+- On Windows CI: MinGW64 (MSYS2 `mingw-w64-x86_64-gcc`)
 
 **Production:**
-- Single compiled binary (CGO disabled in release build)
-- HTTP server embedded with Svelte SPA (internal/web/dist embedded via go:embed)
-- Optional: PostgreSQL 16+ for multi-machine shared access (tested with postgres:16-alpine)
-
-**CI/CD:**
-- Docker: postgres:16-alpine for integration tests (docker-compose.test.yml)
-- Test environment: PostgreSQL test instance on port 5433 with tmpfs storage
-- Build tags: `fts5` required for all tests
-- Makefile targets: build, build-release, test, test-postgres, e2e, lint
+- Single static binary + SQLite database file (`sessions.db` in `~/.agentsview/`)
+- Docker image: `debian:bookworm-slim` base with `ca-certificates` (`Dockerfile`)
+- Deployment targets: local binary, Docker container, Railway (via `docker-entrypoint.sh`)
+- Optional: Caddy reverse proxy (managed mode via `-proxy=caddy` flag, `cmd/agentsview/managed_caddy.go`)
+- Optional: PostgreSQL for multi-machine shared access (`pg push`/`pg serve` subcommands)
 
 ---
 
-*Stack analysis: 2026-03-25*
+*Stack analysis: 2026-03-31*

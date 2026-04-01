@@ -1,168 +1,181 @@
 # Coding Conventions
 
-**Analysis Date:** 2026-03-25
+**Analysis Date:** 2026-03-31
 
 ## Naming Patterns
 
 **Files:**
-- Go files: lowercase with underscores (e.g., `sync_test.go`, `db.go`, `claude.go`)
-- Test files: suffixed with `_test.go` in same package as code under test
-- TypeScript/Svelte files: kebab-case for component files (e.g., `session-list-utils.ts`), camelCase for utilities (e.g., `content-parser.ts`)
-- Test files: suffixed with `.test.ts` colocated with source (e.g., `sessions.svelte.js` and `sessions.test.ts`)
+- Go: `snake_case.go` for all source files (e.g., `sessions.go`, `db_test.go`)
+- Go platform variants: `<name>_<os>.go` (e.g., `boottime_darwin.go`, `procstart_linux.go`)
+- Go test files: `<name>_test.go` co-located with the source file
+- TypeScript/Svelte: `camelCase.ts` for utilities, `PascalCase.svelte` for components
+- Frontend test files: `<name>.test.ts` co-located with the source file (e.g., `format.test.ts`)
+
+**Packages:**
+- Go: lowercase package names matching directory names (`package db`, `package server`)
+- External test packages use `_test` suffix: `package server_test`, `package db_test`
+- Internal test packages (white-box) use same package name: `package server`, `package db`
+- Internal-only white-box test files named `<name>_internal_test.go` (e.g., `deadline_internal_test.go`, `helpers_internal_test.go`)
 
 **Functions:**
-- Go: exported functions PascalCase (e.g., `ParseClaudeSession`, `GetReader`, `Open`), private functions camelCase (e.g., `scanSessionRow`, `makeD`, `probeDatabase`)
-- TypeScript: camelCase for both exported and internal functions (e.g., `createSessionsStore`, `getSession`, `listSessions`)
+- Go: exported functions use `PascalCase` (`GetSession`, `ListSessions`, `UpsertSession`)
+- Go: unexported functions use `camelCase` (`buildSessionFilter`, `scanSessionRow`, `makeDSN`)
+- TypeScript: `camelCase` for all functions (`formatTokenCount`, `sanitizeSnippet`, `listSessions`)
 
-**Variables:**
-- Go: camelCase for local variables and struct fields (e.g., `entries`, `subagentMap`, `filePath`)
-- Go structs: exported fields PascalCase (e.g., `ID`, `FirstMessage`, `DeletedAt`)
-- TypeScript: camelCase consistently (e.g., `sessionID`, `endedAt`, `messageCount`)
-- Constants in Go: UPPER_SNAKE_CASE (e.g., `maxLineSize`, `forkThreshold`, `batchSize`)
-- HTTP query parameters and JSON fields: snake_case (e.g., `next_cursor`, `user_message`, `session_count`)
+**Variables and Constants:**
+- Go: exported constants use `PascalCase` (`DefaultSessionLimit`, `MaxSessionLimit`, `ErrInvalidCursor`)
+- Go: unexported constants use `camelCase` (`dataVersion`, `schemaFTS`)
+- Go: error sentinel variables named `Err<Description>` (e.g., `ErrInvalidCursor`, `ErrReadOnly`, `ErrSessionExcluded`)
+- TypeScript: `camelCase` for variables, `PascalCase` for types and interfaces
 
 **Types:**
-- Go: exported types PascalCase (e.g., `Session`, `SearchFilter`, `Engine`, `DB`)
-- TypeScript: exported types PascalCase or `Type` suffix (e.g., `SessionPage`, `Granularity`)
-- Interface types in Go: suffixed with lowercase singular noun (e.g., `rowScanner`, `syncStateStore`)
-- JSON struct tags: snake_case with omitempty for optional fields (e.g., `json:"display_name,omitempty"`)
+- Go: exported types use `PascalCase` (`Session`, `SessionFilter`, `SessionPage`, `SearchFilter`)
+- Go: interface types do not use `I` prefix — e.g., `Store`, not `IStore`
+- TypeScript: `PascalCase` for type aliases and interfaces (`Session`, `ListSessionsParams`)
+
+**Test helpers:**
+- Go: helper functions prefixed with `require` for fatal assertions (`requireNoError`, `requireFTS`, `requireSessionExists`)
+- Go: helper functions prefixed with `assert` for non-fatal assertions (`assertRecorderStatus`, `assertContentType`, `assertContainsAll`)
+- Go: setup helpers named `setup`, `testDB`, `testServer`
+- Go: seed/data builder helpers named descriptively (`userMsg`, `asstMsg`, `insertSession`, `seedSession`)
 
 ## Code Style
 
 **Formatting:**
-- Go: standard `gofmt` formatting (run via `go fmt ./...`)
-- TypeScript: Vite + Svelte 5 setup with strict TypeScript (`noUncheckedIndexedAccess`, `verbatimModuleSyntax`)
-- Frontend: Svelte 5 reactive runes (.svelte.js files) for stores
+- Go: `go fmt ./...` required before commits (CLAUDE.md)
+- Go: `go vet ./...` required before commits (CLAUDE.md)
+- TypeScript: no separate formatter config; relies on TypeScript strict compiler checks
 
 **Linting:**
-- Go: golangci-lint with these enabled linters: errcheck, govet, ineffassign, modernize, staticcheck, unused
-- Go: errcheck is disabled for _test.go files (test error handling not enforced)
-- Go: modernize linter excludes "omitzero:" rule
-- TypeScript: svelte-check for Svelte type checking; no explicit ESLint config (relies on TS strict mode)
+- Go: `golangci-lint` with config at `.golangci.yml` (version 2)
+  - Enabled: `errcheck`, `govet`, `ineffassign`, `modernize`, `staticcheck`, `unused`
+  - `errcheck` excluded for `_test.go` files
+  - Build tag `fts5` included in linter run
+- TypeScript: `svelte-check` with `tsconfig.json`
+  - `"strict": true`
+  - `"noUncheckedIndexedAccess": true` — array index access is typed as potentially undefined
+  - `"noImplicitOverride": true`
+  - `"verbatimModuleSyntax": true`
 
 ## Import Organization
 
-**Order (Go):**
-1. Standard library imports (`package`, `context`, `database/sql`, etc.)
-2. Third-party imports (`github.com/`, other external packages)
-3. Internal imports (`github.com/wesm/agentsview/internal/...`)
-- Blank line between each group
+**Go order (standard goimports grouping):**
+1. Standard library packages
+2. Third-party packages (blank line separator)
+3. Internal packages (e.g., `github.com/wesm/agentsview/internal/...`)
 
-**Order (TypeScript):**
-1. Node built-ins (`"node:..."`)
-2. npm packages (`@sveltejs`, `vitest`, etc.)
-3. Local imports (`"../..."`, `"./"`)
-- No blank lines required by convention; imports often grouped by feature
+**Package alias usage:**
+- Alias stdlib packages only when they conflict with internal names (e.g., `gosync "sync"` in `internal/server/server.go` to avoid clash with the `sync` package variable name)
 
-**Path Aliases:**
-- Go: no aliases; use full import paths
-- TypeScript: implicit `src` aliasing via Vite (imports from `src/` can use direct paths like `"../stores"`)
+**TypeScript import order:**
+1. Vitest/testing imports (`describe`, `it`, `expect`, `vi`, `beforeEach`)
+2. Module under test (named imports)
+3. Related types (`import type { ... }`)
+
+**Path aliases:**
+- No custom TypeScript path aliases; all imports use relative paths
+- ESM-compatible `.js` extension used in all TypeScript imports (e.g., `"./format.js"`, `"../api/types.js"`)
 
 ## Error Handling
 
-**Patterns:**
-- Go: errors wrapped with `fmt.Errorf("%w", err)` to preserve error chain
-- Go: custom error types defined as `var ErrName = errors.New("message")` in package scope (see `ErrInvalidCursor`, `ErrSessionExcluded` in `internal/db/sessions.go`)
-- Go: error checking done inline with early return (no error accumulation)
-- TypeScript: Promise rejections caught in try/catch blocks; optional chaining (`?.`) used for safe property access
+**Go patterns:**
+- Wrap errors with context using `fmt.Errorf("operation description: %w", err)`
+- Sentinel errors for distinguishable cases: `var ErrFoo = errors.New("...")` at package level
+- Custom error types implement `error` interface when needed (e.g., `errReadOnly struct{}` in `internal/db/store.go`)
+- HTTP handlers delegate to helper functions for common error cases (all in `internal/server/response.go`):
+  - `handleContextError(w, err)` — handles `context.Canceled` silently, `context.DeadlineExceeded` with 504
+  - `handleReadOnly(w, err)` — handles `ErrReadOnly` with 501 Not Implemented
+  - `writeError(w, status, "message")` — emits JSON `{"error":"..."}` with given status
+  - `writeJSON(w, status, v)` — standard JSON response helper
+- Context cancellation is handled silently (no response written) — assumed client disconnected
+- `log.Fatal` only for unrecoverable startup errors; all other errors returned to caller
 
-**Return values:**
-- Go: errors always returned last; functions return `(result, error)` or `(result1, result2, error)`
-- Go: `nil` returned for error-free execution
-- TypeScript: Promises used for async operations; errors thrown for exceptional cases
+**TypeScript patterns:**
+- Async functions return promises; errors bubble up naturally to store/component
+- HTTP errors surfaced via `ApiError` class exported from `frontend/src/lib/api/client.ts`
+- No defensive try/catch wrappers at every call site; boundary-level error handling in stores
 
 ## Logging
 
-**Framework:** Go `log` package (stdlib) - specifically `log.Printf()` for non-fatal messages
+**Go:**
+- `log.Printf` for informational runtime messages
+- `log.Fatalf` only for unrecoverable startup failures
+- Plain stdlib `log` package — no structured logging library
+- Log messages: lowercase, no trailing punctuation (e.g., `"data version outdated; full resync required"`)
+- No emojis in log output (project-wide rule from CLAUDE.md)
 
-**Patterns:**
-- Go: `log.Printf()` used for informational and warning messages in startup/sync logic (see `internal/db/db.go`, `internal/sync/engine.go`)
-- Go: debug logs rare; logging focused on significant state transitions
-- TypeScript: console logging minimal; mostly used in test setup/teardown
-
-**What to log:**
-- Database version mismatches or schema changes
-- Sync engine state transitions
-- Configuration loading issues
-- Parser errors and skipped files (rare)
-
-**What NOT to log:**
-- Sensitive credentials or tokens
-- Full file contents or large data structures
-- Per-request HTTP details
+**TypeScript:**
+- No logging framework; `console.error` for unexpected non-fatal browser errors
 
 ## Comments
 
-**When to Comment:**
-- Complex algorithms requiring explanation (DAG fork detection in `claude.go`)
-- Exported functions (Go convention: comment above function name)
-- Non-obvious state management or synchronization logic
-- Constants with special meaning (see `dataVersion` comment in `internal/db/db.go`)
-- Business logic constraints (see `forkThreshold` in `internal/parser/claude.go`)
+**Go doc comments:**
+- Exported types and functions always have a doc comment starting with the identifier name
+- Example: `// scanSessionRow scans sessionBaseCols into a Session.`
+- Unexported functions commented when behavior is non-obvious
+- Constants with related semantics grouped under a single block comment
+- Inline comments explain SQL query intent and non-obvious logic paths
 
-**JSDoc/Doc Comments:**
-- Go: comment strings placed directly above exported items; follow Go documentation conventions
-- Go: example: `// Open creates or opens a SQLite database at the given path.` followed by implementation details
-- TypeScript: minimal; mostly rely on TS type hints rather than comments
-- Frontend: component comments for complex Svelte state
-
-**Comment style:**
-- Start with subject (e.g., "// ParseClaudeSession parses...")
-- Use second person sparingly; prefer active voice
-- Multi-line comments: separate related thoughts with blank comment lines
-
-**ABOUTME comments:**
-- Used in package files for high-level package documentation (e.g., `// ABOUTME: Parses Claude Code JSONL session files...` in `internal/parser/claude.go`)
-- Provides context for what the entire file/package does
+**TypeScript:**
+- JSDoc used for public methods in page objects (`frontend/e2e/pages/sessions-page.ts`)
+- Inline comments for non-obvious logic; test file comments describe intent
+- No requirement for JSDoc on all utility functions
 
 ## Function Design
 
-**Size:**
-- Go: prefer functions under 100 lines; break complex logic into helpers
-- TypeScript: prefer small store functions; use composition for complex state logic
+**Size:** Keep functions focused. Complex SQL queries are stored as `const` strings or built by dedicated `build*` helpers (e.g., `buildSessionFilter` in `internal/db/sessions.go`).
 
 **Parameters:**
-- Go: pass configurations as structs when many related options (e.g., `EngineConfig` in `internal/sync/engine.go`)
-- Go: use Option pattern for optional parameters on constructors (see `Option func(*Server)` in `internal/server/server.go`)
-- TypeScript: use object parameters with destructuring for optional flags (e.g., `overrides?: Partial<...>` in tests)
+- Go: `context.Context` always first for I/O-touching functions: `func (db *DB) GetSession(ctx context.Context, id string)`
+- Go: functional options pattern for server construction: `opts ...Option` where `type Option func(*Server)`
+- Go: test builder options via variadic `...func(*T)`: `func insertSession(t *testing.T, d *DB, id, project string, opts ...func(*Session))`
 
 **Return Values:**
-- Go: always return error as last value if present
-- Go: use named return values only for clarity on large functions (most functions use unnamed returns)
-- TypeScript: return Promises for async; use tuple types sparingly
+- Go: `(result, error)` for all fallible operations; never panic for recoverable errors
+- Go: nullable domain objects returned as pointer: `GetSession` returns `(*Session, error)` where `nil, nil` means not found
+- Go: `(bool, error)` pattern when presence and error must both be communicated
 
 ## Module Design
 
-**Exports:**
-- Go: packages export top-level New/Create functions; constructors initialize all needed state
-- Go: example: `func New(cfg config.Config, database db.Store, ...) *Server` in `internal/server/server.go`
-- Go: use interfaces for dependencies to enable mocking (see `db.Store` interface used by handlers)
-- TypeScript: export default or named exports depending on module purpose
+**Go package structure:**
+- Each `internal/` subdirectory is a self-contained package with single responsibility
+- `db.Store` interface in `internal/db/store.go` decouples HTTP handlers from SQLite
+- Compile-time interface check pattern: `var _ Store = (*DB)(nil)` — used in `internal/db/store.go`
+- Platform-specific code split into `_<os>.go` files with `//go:build` constraints
 
-**Barrel Files:**
-- Go: no barrel files; each package is self-contained
-- TypeScript: `types.js` and `client.js` files serve as barrels for API types/functions
+**Struct tags:**
+- JSON tags on all exported struct fields using `snake_case`: `json:"field_name"`
+- TOML tags on config structs: `toml:"field_name"`
+- `omitempty` used selectively on optional/nullable fields
+- Internal fields excluded from serialization with `json:"-"`
+- Example from `internal/db/sessions.go`:
 
-**Package organization:**
-- Go: one responsibility per package (`db` handles database ops, `sync` handles file discovery, `parser` handles session parsing)
-- Go: internal packages prefixed with `internal/` to prevent external imports
-- TypeScript: stores organized by feature (`sessions.svelte.js`, `messages.test.ts`, etc.)
+```go
+type Session struct {
+    ID           string  `json:"id"`
+    Project      string  `json:"project"`
+    DisplayName  *string `json:"display_name,omitempty"`
+    DBPath       string  `json:"-" toml:"-"`
+}
+```
 
-## Testing Conventions
+**TypeScript module design:**
+- Svelte stores use factory function pattern returning a store instance with methods: `createSessionsStore()`
+- API client functions are plain named exports from `frontend/src/lib/api/client.ts`
+- Types separated into `frontend/src/lib/api/types.ts`
+- Test-only exports prefixed with `_` to signal internal use: `_resetNonceCounter`
 
-**Test helpers:**
-- Go: use `t.Helper()` in helper functions to improve error reporting (see `sync_test.go`)
-- Go: table-driven tests preferred for parameterized testing (see `TestParseSyncFlags` in `sync_test.go`)
-- TypeScript: use `beforeEach` to set up mocks and clear state before each test
+## Project-Specific Rules
 
-**Type assertions and mocking:**
-- Go: mock database stores using embedded interfaces (e.g., `searchSpy` in `internal/server/search_test.go` embeds `db.Store` and implements only needed methods)
-- TypeScript: `vi.mock()` used to mock API client; `vi.mocked()` to access mocked functions
+From CLAUDE.md — these must always be followed:
 
-**Test structure:**
-- Go: test functions named `Test<FunctionName>` or `Test<FunctionName><Case>`
-- TypeScript: vitest describe/it structure; tests organized by feature store
+- **Never drop, truncate, or recreate the database** to handle data version changes. Use non-destructive migrations (`ALTER TABLE`, `UPDATE`) or full resync via swap.
+- **No emojis** in code, comments, log output, or user-facing text.
+- **Prefer stdlib** over external dependencies.
+- **Tests must be fast and isolated** — use `t.TempDir()` for all temporary directories.
+- **Commit every turn** — commit at end of each working turn.
+- **Markdown files** formatted with `mdformat --wrap 80` (requires `mdformat-tables` plugin).
 
 ---
 
-*Convention analysis: 2026-03-25*
+*Convention analysis: 2026-03-31*

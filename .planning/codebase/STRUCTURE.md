@@ -1,307 +1,224 @@
 # Codebase Structure
 
-**Analysis Date:** 2026-03-25
+**Analysis Date:** 2026-03-31
 
 ## Directory Layout
 
 ```
 agentsview/
-├── cmd/                        # Executable entry points
-│   ├── agentsview/             # Main binary (server, sync, pg commands)
-│   └── testfixture/            # Test data generator for E2E tests
-├── internal/                   # Core packages (not externally importable)
-│   ├── config/                 # Configuration loading (TOML, flags, env vars)
-│   ├── db/                     # SQLite database operations
-│   ├── postgres/               # PostgreSQL integration (optional push-sync)
-│   ├── parser/                 # Session file parsers (13+ agent types)
-│   ├── server/                 # HTTP server and REST API handlers
-│   ├── sync/                   # Sync engine, file watcher, discovery
-│   ├── insight/                # Analytics and insights generation
-│   ├── timeutil/               # Time parsing utilities
-│   ├── web/                    # Embedded frontend assets
-│   ├── dbtest/                 # Test database helpers
-│   ├── testjsonl/              # Test JSON-L utilities
-│   └── update/                 # Self-update logic
-├── frontend/                   # Svelte 5 SPA (Vite-based)
-│   ├── src/                    # TypeScript/Svelte source
-│   │   ├── lib/                # Reusable components and utilities
-│   │   │   ├── components/     # UI components (40+ files)
-│   │   │   ├── stores/         # Svelte stores (state management)
-│   │   │   ├── api/            # API client code
-│   │   │   └── utils/          # Shared utilities
-│   │   ├── App.svelte          # Root component
-│   │   └── main.ts             # Entry point
-│   ├── e2e/                    # Playwright E2E tests
-│   ├── public/                 # Static assets
-│   └── dist/                   # Build output (embedded in binary)
-├── scripts/                    # Utility scripts
-│   ├── e2e-server.sh           # E2E test server
-│   └── changelog.sh            # Changelog generator
-├── docs/                       # Documentation
-├── .github/                    # GitHub Actions CI/CD
-├── .githooks/                  # Pre-commit git hooks
-├── go.mod, go.sum              # Go module dependencies
-├── Makefile                    # Build automation
-├── CLAUDE.md                   # Project conventions and setup
-└── .roborev.toml               # RoboRev task definitions
+├── cmd/
+│   ├── agentsview/          # Go server binary entrypoint
+│   │   ├── main.go          # CLI dispatch, server startup
+│   │   ├── serve_runtime.go # Port discovery, Caddy wiring, wait loop
+│   │   ├── managed_caddy.go # Managed Caddy reverse proxy
+│   │   └── pg.go            # pg subcommand group (push, status, serve)
+│   └── testfixture/         # Test data generator for E2E tests
+├── internal/
+│   ├── config/              # Config loading: TOML, env vars, CLI flags
+│   ├── db/                  # SQLite store: schema, sessions, messages, search, analytics
+│   │   └── schema.sql       # Embedded DDL (sessions, messages, tool_calls, etc.)
+│   ├── dbtest/              # Shared test helpers (OpenTestDB, WriteTestFile)
+│   ├── parser/              # Agent definitions + parsed domain types
+│   │   └── types.go         # AgentDef, Registry, ParsedSession, ParsedMessage
+│   ├── postgres/            # PostgreSQL: push sync, read-only store, schema
+│   ├── server/              # HTTP handlers, middleware, auth, Clerk, share
+│   ├── sync/                # Sync engine, file watcher, session discovery
+│   ├── testjsonl/           # JSONL test fixture helpers
+│   ├── timeutil/            # Time parsing utilities
+│   └── web/                 # Embedded frontend (dist/ copied at build time)
+│       ├── embed.go         # //go:embed all:dist
+│       └── dist/            # Compiled Svelte SPA (generated, committed)
+├── frontend/                # Svelte 5 SPA source
+│   ├── src/
+│   │   ├── main.ts          # SPA entry point
+│   │   ├── App.svelte       # Root component
+│   │   ├── Root.svelte      # Auth gate / outer shell
+│   │   └── lib/
+│   │       ├── api/         # REST client + TypeScript types
+│   │       │   ├── client.ts
+│   │       │   └── types/   # core.ts, analytics.ts, insights.ts, etc.
+│   │       ├── components/  # Svelte UI components
+│   │       │   ├── layout/      # AppHeader, ThreeColumnLayout, breadcrumb
+│   │       │   ├── sidebar/     # SessionList, SessionItem
+│   │       │   ├── content/     # MessageList, MessageContent, ToolBlock, etc.
+│   │       │   ├── modals/      # AboutModal, ShortcutsModal, ConfirmDeleteModal
+│   │       │   └── command-palette/ # CommandPalette
+│   │       ├── stores/      # Svelte 5 rune-based state stores
+│   │       ├── utils/       # Pure TypeScript helpers
+│   │       └── virtual/     # Virtual list (createVirtualizer)
+│   ├── e2e/                 # Playwright E2E test specs
+│   └── dist/                # Frontend build output (source of truth for internal/web/dist)
+├── scripts/                 # Release, install, E2E server, changelog scripts
+├── docs/                    # Documentation files
+├── .github/workflows/       # GitHub Actions CI
+├── Makefile                 # Build, test, install, lint targets
+├── go.mod                   # Go module (github.com/wesm/agentsview, go 1.25.5)
+├── go.sum
+├── CLAUDE.md                # Project instructions for AI agents
+└── README.md
 ```
 
 ## Directory Purposes
 
 **`cmd/agentsview/`:**
-- Purpose: Main binary entry point with CLI subcommands
-- Contains: main.go (router), pg.go (PostgreSQL commands), sync.go (sync orchestration), serve_runtime.go (server startup)
-- Key files: `main.go` (runServe, runSync, runPG routing)
-- Tests: *_test.go files for each command module
-
-**`cmd/testfixture/`:**
-- Purpose: Generate test session data for E2E/integration tests
-- Contains: Creates synthetic Claude/Codex/Copilot sessions in memory
-- Used by: E2E tests to seed database
+- Purpose: Binary entrypoint only — wiring, startup, shutdown, CLI subcommands
+- Contains: `main.go`, `serve_runtime.go`, `managed_caddy.go`, `pg.go` and their test files
+- Key files: `main.go` (startup sequence), `serve_runtime.go` (port discovery + Caddy lifecycle)
+- Rule: No business logic here; delegate to `internal/` packages
 
 **`internal/config/`:**
-- Purpose: Load and resolve application configuration
-- Contains: Config struct (65+ fields), TOML parsing, environment variable resolution, flag registration
-- Key files: `config.go` (main config logic), `persistence_test.go` (config persistence tests)
-- Env vars: CLAUDE_PROJECTS_DIR, CODEX_SESSIONS_DIR, AGENT_VIEWER_DATA_DIR, etc.
+- Purpose: All configuration loading — TOML config file, env var overrides, CLI flag registration
+- Key files: `config.go` — defines `Config` struct, `Load()`, `RegisterServeFlags()`
+- Note: `AgentDirs` map uses `parser.AgentType` keys; zero value is safe (defaults applied during load)
 
 **`internal/db/`:**
-- Purpose: All SQLite operations and schema management
-- Contains: ~10,000 lines across 20 files covering sessions, messages, search, analytics
-- Key files:
-  - `db.go`: Database open/close, connection pooling, migration
-  - `schema.sql`: Schema definition (sessions, messages, FTS5, indexes, triggers)
-  - `sessions.go`: Session CRUD, batch upsert, parent-child relationships
-  - `messages.go`: Message insert, ordering, filtering
-  - `search.go`: FTS5 full-text search queries
-  - `analytics.go`: Analytics queries (agent breakdown, token usage, trends)
-- Data version: Tracks schema changes; version 6 as of 2026-03
-- Tests: 100+ test cases in db_test.go covering all major operations
+- Purpose: SQLite store — schema management, CRUD, FTS5 search, analytics, migrations
+- Key files: `db.go` (open/init/migrate), `store.go` (Store interface), `schema.sql` (DDL), `sessions.go`, `messages.go`, `search.go`, `analytics.go`
+- Tables: `sessions`, `messages`, `tool_calls`, `tool_result_events`, `insights`, `pinned_messages`, `starred_sessions`, `excluded_sessions`, `skipped_files`, `pg_sync_state`, `shared_sessions`
+- `Store` interface in `store.go` must be implemented by any DB backend
+
+**`internal/dbtest/`:**
+- Purpose: Shared test helpers — `OpenTestDB(t)`, `WriteTestFile(t, path, content)`, `Ptr[T](v)`
+- Used by: all packages with DB tests
 
 **`internal/parser/`:**
-- Purpose: Parse 13+ agent-specific session formats
-- Contains: 47 files, 35K lines covering discovery, parsing, fork detection
-- Agent-specific modules:
-  - `claude.go`: Claude Code projects (JSON format)
-  - `codex.go`: Codex sessions (JSON)
-  - `copilot.go`: Copilot CLI sessions
-  - `cursor.go`: Cursor editor projects
-  - `gemini.go`: Google Gemini CLI
-  - `amp.go`: Amp threads
-  - `iflow.go`, `kimi.go`, `pi.go`, `openclaw.go`, `vscode_copilot.go`, `zencoder.go`, `opencode.go`
-- Registry: `types.go` defines AgentDef and centralized Registry slice
-- Utilities:
-  - `discovery.go`: File system traversal and discovery per agent
-  - `fork_test.go`: Fork detection logic
-  - `content.go`: Content extraction and formatting
-  - `project.go`: Project metadata extraction (git info, branch)
-- Tests: 15+ test files with 30K+ lines of test cases
-
-**`internal/server/`:**
-- Purpose: HTTP server and REST API
-- Contains: 54 files covering handlers, middleware, state management
-- Key files:
-  - `server.go`: Router setup, handler registration, graceful shutdown
-  - `sessions.go`: GET /api/sessions, session list with filters
-  - `search.go`: GET /api/search, full-text search
-  - `events.go`: GET /api/events, SSE stream for sync progress
-  - `analytics.go`: Analytics endpoints (trends, breakdowns)
-  - `export.go`: Session export (JSON, CSV)
-  - `resume.go`: Resume sessions in terminal/IDE
-  - `auth.go`: Bearer token validation
-  - `statefile.go`: State file management (host, port, PID)
-- Handler patterns: Each handler is a named function (e.g., `handleSessions()`)
-- Middleware: `middleware.go` handles CORS, auth, timeout wrapping
-
-**`internal/sync/`:**
-- Purpose: Sync orchestration, file watcher, discovery
-- Contains: 14 files covering engine, watcher, discovery, progress tracking
-- Key files:
-  - `engine.go`: SyncAll(), SyncPaths(), ResyncAll(), skip cache management
-  - `watcher.go`: File system watcher (fsnotify-based), debouncing
-  - `discovery.go`: Session file discovery per agent type
-  - `progress.go`: Progress tracking and reporting
-  - `hash.go`: File hashing for change detection
-- Skip cache: In-memory map (path → mtime), persisted to database
-- Batch size: 100 sessions per transaction
-- Max workers: 8 concurrent file parsers
+- Purpose: Agent type definitions and parsed domain types; source file parsing logic
+- Key file: `types.go` — `AgentDef`, `Registry` (all agents), `ParsedSession`, `ParsedMessage`, `ParseResult`
+- Only one source file currently (`types.go`) — parsers (claude.go, codex.go, etc.) exist in local-mode build variants
 
 **`internal/postgres/`:**
-- Purpose: Optional PostgreSQL support for multi-machine sync
-- Contains: 11 files covering connection, schema, push logic, read-only store
-- Key files:
-  - `push.go`: Push sync logic (fingerprinting, upsert)
-  - `sync.go`: Full push sync lifecycle
-  - `store.go`: PostgreSQL read-only store (implements db.Store interface)
-  - `schema.go`: PostgreSQL schema (DDL)
-  - `connect.go`: Connection setup, SSL handling
-  - `sessions.go`, `messages.go`, `analytics.go`: Query implementations
-- Used by: CLI `pg push` and `pg serve` commands
+- Purpose: Optional PostgreSQL integration — read-only `Store` implementation, push sync from SQLite, schema management
+- Key files: `store.go` (read-only Store), `push.go` (sync logic), `schema.go` (DDL), `connect.go` (DSN helpers)
+
+**`internal/server/`:**
+- Purpose: HTTP router, all REST API handlers, middleware, auth, Clerk integration, share push/receive
+- Key files: `server.go` (router + middleware chain), `auth.go` (auth middleware), `clerk.go` (Clerk JWT verification), `sessions.go`, `messages.go`, `search.go`, `metadata.go`, `starred.go`, `share.go`, `share_write.go`, `response.go` (helpers), `params.go` (query param parsing), `statefile.go` (process state)
+
+**`internal/sync/`:**
+- Purpose: Sync engine, file watcher, session discovery (used in local mode builds only)
+- Key files: `engine.go` (sync orchestration)
 
 **`internal/web/`:**
-- Purpose: Embedded frontend assets
-- Contains: Compiled frontend at `dist/` (embedded via go:embed)
-- Build process: Vite builds frontend → copied to `internal/web/dist/` → embedded in binary
+- Purpose: Embed the compiled frontend into the Go binary
+- Key files: `embed.go` (single `//go:embed all:dist` directive), `dist/` (generated, committed)
+- Note: `dist/` is populated by `make frontend` and then committed; the binary reads it at startup
 
-**`frontend/src/`:**
-- Purpose: Svelte 5 SPA source code
-- Structure:
-  - `App.svelte`: Root component with routing
-  - `lib/components/`: 40+ components organized by feature
-    - `layout/`: Header, sidebar, main container
-    - `sidebar/`: Session list, filters
-    - `content/`: Message display, syntax highlighting
-    - `analytics/`: Charts, insights
-    - `modals/`: Search, settings, confirm dialogs
-    - `command-palette/`: Keyboard shortcuts
-    - `pinned/`: Starred sessions
-    - `trash/`: Soft-deleted sessions
-  - `lib/stores/`: Svelte stores for state (sessions, current selection, filters)
-  - `lib/api/`: HTTP client with fetch-based API calls
-  - `lib/utils/`: Formatting, date parsing, search utilities
+**`frontend/src/lib/stores/`:**
+- Purpose: Svelte 5 rune-based class stores — all client-side reactive state
+- Files: `sessions.svelte.ts`, `messages.svelte.ts`, `sync.svelte.ts`, `router.svelte.ts`, `starred.svelte.ts`, `search.svelte.ts`, `ui.svelte.ts`, `settings.svelte.ts`, `pins.svelte.ts`, `shared.svelte.ts`
+- Pattern: Each store is a class with `$state` fields exported as a singleton (`export const sessions = new SessionsStore()`)
 
-**`frontend/e2e/`:**
-- Purpose: Playwright E2E tests
-- Contains: Tests for main UI flows (session browsing, search, export)
+**`frontend/src/lib/api/`:**
+- Purpose: All HTTP calls to the Go server
+- Key files: `client.ts` (all API functions, auth token handling, base URL resolution), `types/core.ts` (Session, Message, ToolCall, etc.), `types/analytics.ts`, `types/insights.ts`
 
-**`internal/insight/`:**
-- Purpose: Analytics and AI-powered insights
-- Contains: Analytics queries, insight generation via LLM streaming
-- Key files: `analytics.go` (analytics data), `insights.go` (insight generation)
+**`frontend/src/lib/components/`:**
+- Grouped by UI region: `layout/` (shell chrome), `sidebar/` (session list), `content/` (message viewer), `modals/`, `command-palette/`
 
-**`internal/timeutil/`:**
-- Purpose: Time parsing utilities
-- Contains: Helpers for parsing agent-specific timestamp formats
-
-**`scripts/`:**
-- Purpose: Build and testing utilities
-- Files:
-  - `e2e-server.sh`: Start server in E2E test mode
-  - `changelog.sh`: Generate changelog from git log
+**`frontend/src/lib/utils/`:**
+- Purpose: Pure TypeScript helpers — content parsing, formatting, markdown rendering, keyboard shortcuts, CSV export, clipboard, poll, transcript-mode, tool-params, model detection
+- All files have colocated `.test.ts` test files
 
 ## Key File Locations
 
 **Entry Points:**
-- `cmd/agentsview/main.go`: CLI routing and server startup
-- `cmd/agentsview/pg.go`: PostgreSQL command handlers
-- `internal/server/server.go`: HTTP server setup and routing
-- `frontend/src/main.ts`: Frontend entry point
+- `cmd/agentsview/main.go`: Go binary startup, CLI dispatch
+- `frontend/src/main.ts`: Svelte SPA mount
+- `frontend/src/App.svelte`: Root Svelte component
 
 **Configuration:**
-- `internal/config/config.go`: Config struct and loading logic
-- `~/.agentsview/config.toml`: User config file (TOML format)
-- Env vars: `CLAUDE_PROJECTS_DIR`, `CODEX_SESSIONS_DIR`, `AGENT_VIEWER_DATA_DIR`, etc.
+- `internal/config/config.go`: `Config` struct and loader
+- `.env.example`: Required environment variable documentation
+- `Makefile`: All build/test/install targets
 
 **Core Logic:**
-- `internal/sync/engine.go`: Sync orchestration
-- `internal/parser/types.go`: Agent registry and types
-- `internal/parser/claude.go`: Claude parser (most complex agent)
-- `internal/db/db.go`: Database operations
-- `internal/db/schema.sql`: Schema definition
+- `internal/db/store.go`: `Store` interface — the contract between server and storage
+- `internal/db/schema.sql`: Embedded DDL — source of truth for DB schema
+- `internal/db/db.go`: DB open, init, migration, `Update()` / `Reader()`
+- `internal/server/server.go`: HTTP router, middleware chain, `routes()`
+- `internal/server/auth.go`: Auth middleware (Clerk + Bearer token)
+- `internal/parser/types.go`: `AgentDef`, `Registry`, all domain types
 
 **Testing:**
-- `cmd/agentsview/sync_test.go`: Sync integration tests
-- `internal/db/db_test.go`: Comprehensive database tests (120K+ lines)
-- `internal/parser/parser_test.go`: Parser unit tests
-- `internal/server/server_test.go`: Server/API tests (70K+ lines)
-- `frontend/e2e/`: Playwright E2E tests
+- `internal/dbtest/dbtest.go`: Shared DB test helpers
+- `internal/testjsonl/testjsonl.go`: JSONL fixture helpers
+- `frontend/e2e/`: Playwright E2E specs
+- `scripts/e2e-server.sh`: E2E server launcher
 
 ## Naming Conventions
 
-**Files:**
-- Go source: `snake_case.go` (e.g., `session_mgmt.go`)
-- Tests: `*_test.go` suffix (e.g., `parser_test.go`)
-- Integration tests: `*_integration_test.go` suffix
-- Platform-specific: `*_unix.go`, `*_windows.go`, `*_darwin.go` suffixes
-- Svelte: `PascalCase.svelte` for components (e.g., `App.svelte`, `SessionList.svelte`)
+**Go Files:**
+- `snake_case.go` for all Go source files
+- Platform-specific: `boottime_darwin.go`, `process_unix.go` (GOOS suffix)
+- Test files: `foo_test.go` (same package or `package foo_test`)
+- Internal tests use `package server` (same package); external tests use `package server_test`
 
-**Directories:**
-- Go packages: lowercase, no underscores (e.g., `internal/parser`, `internal/server`)
-- Feature directories: plural nouns (e.g., `components/`, `stores/`, `utils/`)
-- Test utilities: `*test/` suffix (e.g., `internal/dbtest/`)
+**Go Packages:**
+- Single-word, lowercase, matching the directory name: `db`, `server`, `config`, `parser`, `sync`
+- Test helper packages: `dbtest`, `testjsonl`
 
-**Go Functions & Variables:**
-- Public (exported): PascalCase (e.g., `SyncAll()`, `ParseSession()`)
-- Private (unexported): camelCase (e.g., `syncWorker()`, `parseMessages()`)
-- Constants: UPPER_SNAKE_CASE (e.g., `maxWorkers`, `periodicSyncInterval`)
-- Interfaces: PascalCase ending in `-er` or `-able` (e.g., `Store`, `rowScanner`)
+**TypeScript / Svelte Files:**
+- Svelte stores: `camelCase.svelte.ts` (e.g., `sessions.svelte.ts`, `ui.svelte.ts`)
+- Svelte components: `PascalCase.svelte` (e.g., `MessageList.svelte`, `SessionItem.svelte`)
+- Utility modules: `kebab-case.ts` (e.g., `content-parser.ts`, `display-items.ts`)
+- Test files colocated: `foo.test.ts` alongside `foo.ts`
 
-**TypeScript/Svelte:**
-- Components: PascalCase (e.g., `SessionList`, `SearchModal`)
-- Functions: camelCase (e.g., `fetchSessions()`, `formatDate()`)
-- Constants: UPPER_SNAKE_CASE (e.g., `API_BASE_URL`)
-- Types: PascalCase (e.g., `Session`, `SearchResult`)
-- Stores: camelCase with `store` suffix (e.g., `sessionStore`, `filterStore`)
+**API Types:**
+- TypeScript interfaces mirror Go struct field names exactly (snake_case JSON) to avoid manual mapping
 
 ## Where to Add New Code
 
-**New Parser (for new agent type):**
-- File: `internal/parser/newagent.go`
-- Pattern: Implement `Discover<Agent>()` and `<Agent>Parser()` functions
-- Register: Add to `Registry` slice in `internal/parser/types.go`
-- Tests: Create `internal/parser/newagent_test.go` with sample session files
+**New REST API endpoint:**
+- Handler function: `internal/server/` (add to appropriate file or create a new one)
+- Register route: `internal/server/server.go` in `routes()`
+- DB query (if needed): `internal/db/` in the relevant file
+- Add to `Store` interface: `internal/db/store.go`
+- TypeScript client function: `frontend/src/lib/api/client.ts`
+- TypeScript type: `frontend/src/lib/api/types/core.ts` (or appropriate sub-file)
 
-**New API Endpoint:**
-- Handler file: `internal/server/newfeature.go` (if grouping related handlers)
-- Or: Add to existing handler file if logically related (e.g., add to `sessions.go`)
-- Route: Register in `internal/server/server.go:routes()` via `mux.HandleFunc()`
-- Tests: Add to `internal/server/server_test.go`
+**New Svelte UI feature:**
+- Store state: `frontend/src/lib/stores/` (add to existing store or create new `foo.svelte.ts`)
+- Component: `frontend/src/lib/components/{layout,sidebar,content,modals}/` (choose appropriate group)
+- Utility: `frontend/src/lib/utils/foo.ts` + colocated `foo.test.ts`
 
-**New Frontend Feature:**
-- Component: `frontend/src/lib/components/feature/<Component>.svelte`
-- Store (if needed): `frontend/src/lib/stores/featureStore.ts`
-- API integration: `frontend/src/lib/api/featureApi.ts` (if new API calls)
-- Tests: Colocated `*.test.ts` file or Playwright spec in `frontend/e2e/`
+**New supported agent:**
+- Add `AgentDef` entry to `Registry` in `internal/parser/types.go`
+- Add parser file: `internal/parser/{agent}.go` (for local-mode file parsing)
+- Add env var to `.env.example`
 
-**New Database Query:**
-- File: `internal/db/newqueries.go` (group by domain)
-- Method receiver: `func (db *DB) QueryName() { ... }`
-- Tests: Add to `internal/db/db_test.go` with table-driven tests
+**New DB table or column:**
+- Add to `internal/db/schema.sql` (new tables) or add `ALTER TABLE` migration to `migrateColumns` in `internal/db/db.go` (new columns)
+- Update probe list in `needsSchemaRebuild` if the column is required for the schema to function
+- Add corresponding query functions to the relevant `internal/db/*.go` file
+- Add method to `Store` interface in `internal/db/store.go`
+- Add stub returning `ErrReadOnly` to the PostgreSQL store in `internal/postgres/store.go`
 
-**New CLI Command:**
-- Handler file: `cmd/agentsview/newcmd.go`
-- Entry: Add case in `main.go` switch statement
-- Flag setup: Use `flag.NewFlagSet()` pattern
-- Tests: Create `cmd/agentsview/newcmd_test.go`
-
-**Configuration Keys:**
-- TOML: Add field to `Config` struct in `internal/config/config.go`
-- Env var: Define in `internal/config/config.go:Load()` resolution logic
-- Flag: Register in `RegisterServeFlags()` or appropriate function
-
-**Utilities:**
-- Shared helpers: `internal/utilities/` or add to existing `internal/timeutil/`
-- Math, string utils: Add functions directly to relevant package
+**New config option:**
+- Add field to `Config` in `internal/config/config.go`
+- Register CLI flag in `RegisterServeFlags`
+- Document in `.env.example` if env-var-backed
 
 ## Special Directories
 
-**`.planning/`:**
-- Purpose: Generated GSD analysis documents (this directory)
-- Contains: ARCHITECTURE.md, STRUCTURE.md, CONVENTIONS.md, TESTING.md, STACK.md, INTEGRATIONS.md, CONCERNS.md
-- Generated: Yes (via GSD mapping tools)
-- Committed: Yes (documents are version-controlled)
+**`internal/web/dist/`:**
+- Purpose: Compiled Svelte SPA assets served by the Go binary
+- Generated: Yes (by `make frontend` / `npm run build` in `frontend/`)
+- Committed: Yes — the binary must embed the built frontend; CI builds from committed dist
 
 **`frontend/dist/`:**
-- Purpose: Built frontend SPA (HTML, CSS, JS)
-- Generated: Yes (by `make frontend`)
-- Committed: No (.gitignore excludes it)
-- Embedded: Copied into Go binary at build time via `go:embed` in `internal/web/web.go`
+- Purpose: Vite build output (source of truth; copied into `internal/web/dist/`)
+- Generated: Yes
+- Committed: No (`.gitignore`d); used only as Vite's output directory before copying
 
-**`internal/parser/testdata/`:**
-- Purpose: Sample session files for parser tests
-- Contains: Real/synthetic session data for each agent type
-- Used by: Parser tests to validate parsing logic
+**`.planning/codebase/`:**
+- Purpose: AI-generated codebase analysis documents consumed by planning and execution tools
+- Generated: Yes (by `gsd:map-codebase`)
 - Committed: Yes
 
 **`scripts/`:**
-- Purpose: Build and test automation
-- Committed: Yes (bash scripts)
-
-**`.githooks/`:**
-- Purpose: Pre-commit hooks (installed via `make install-hooks`)
-- Contains: Code formatting, linting checks
-- Used by: Git pre-commit trigger
+- Purpose: Release automation, install scripts, E2E server, changelog generation
+- Key files: `e2e-server.sh` (starts server for Playwright), `release.sh`, `install.sh`
 
 ---
 
-*Structure analysis: 2026-03-25*
+*Structure analysis: 2026-03-31*
