@@ -15,7 +15,7 @@ import (
 	_ "time/tzdata"
 
 	"github.com/wesm/agentsview/internal/config"
-	"github.com/wesm/agentsview/internal/db"
+	"github.com/wesm/agentsview/internal/postgres"
 	"github.com/wesm/agentsview/internal/server"
 )
 
@@ -48,7 +48,7 @@ func printUsage() {
 	fmt.Printf(`agentsview %s - hosted web viewer for AI agent sessions
 
 Serves a read-only analytics dashboard and session browser backed by
-SQLite. No local file syncing or agent parsing is performed.
+PostgreSQL. No local file syncing or agent parsing is performed.
 
 Usage:
   agentsview [flags]          Start the server (default command)
@@ -71,9 +71,9 @@ Server flags:
   -no-browser         Don't open browser on startup
 
 Environment variables:
-  AGENT_VIEWER_DATA_DIR   Data directory (database, config)
+  AGENT_VIEWER_DATA_DIR   Data directory (config, logs, state)
 
-Data is stored in ~/.agentsview/ by default.
+serve requires [pg].url in config. PostgreSQL 16.13 is the supported runtime target.
 `, version)
 }
 
@@ -92,8 +92,8 @@ func runServe(args []string) {
 	server.WriteStartupLock(cfg.DataDir)
 	defer server.RemoveStartupLock(cfg.DataDir)
 
-	database := mustOpenDB(cfg)
-	defer database.Close()
+	store := mustOpenStore(cfg)
+	defer store.Close()
 
 	ctx, stop := signal.NotifyContext(
 		context.Background(), os.Interrupt, syscall.SIGTERM,
@@ -129,7 +129,7 @@ func runServe(args []string) {
 	}
 	cfg = preparedCfg
 
-	srv := server.New(cfg, database,
+	srv := server.New(cfg, store,
 		server.WithVersion(server.VersionInfo{
 			Version:   version,
 			Commit:    commit,
@@ -238,10 +238,33 @@ func truncateLogFile(path string, limit int64) {
 	_ = os.Truncate(path, 0)
 }
 
-func mustOpenDB(cfg config.Config) *db.DB {
-	database, err := db.Open(cfg.DBPath)
+func mustOpenStore(cfg config.Config) *postgres.Store {
+	pgCfg, err := cfg.ResolvePG()
 	if err != nil {
-		fatal("opening database: %v", err)
+		fatal("resolving postgres config: %v", err)
+	}
+	if pgCfg.URL == "" {
+		fatal("serve requires [pg].url")
+	}
+
+	store, err := postgres.NewStore(
+		pgCfg.URL,
+		pgCfg.Schema,
+		pgCfg.AllowInsecure,
+	)
+	if err != nil {
+		fatal("opening postgres: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(), 30*time.Second,
+	)
+	defer cancel()
+	if err := postgres.EnsureSchema(
+		ctx, store.DB(), pgCfg.Schema,
+	); err != nil {
+		_ = store.Close()
+		fatal("ensuring postgres schema: %v", err)
 	}
 
 	if cfg.CursorSecret != "" {
@@ -249,10 +272,10 @@ func mustOpenDB(cfg config.Config) *db.DB {
 		if err != nil {
 			fatal("invalid cursor secret: %v", err)
 		}
-		database.SetCursorSecret(secret)
+		store.SetCursorSecret(secret)
 	}
 
-	return database
+	return store
 }
 
 // fatal prints a formatted error to stderr and exits.

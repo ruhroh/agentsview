@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/wesm/agentsview/internal/config"
-	"github.com/wesm/agentsview/internal/db"
 	"github.com/wesm/agentsview/internal/web"
 )
 
@@ -33,7 +32,7 @@ type VersionInfo struct {
 type Server struct {
 	mu      gosync.RWMutex
 	cfg     config.Config
-	db      db.Store
+	db      Store
 	mux     *http.ServeMux
 	httpSrv *http.Server
 	version VersionInfo
@@ -63,7 +62,7 @@ type Server struct {
 
 // New creates a new Server.
 func New(
-	cfg config.Config, database db.Store,
+	cfg config.Config, database Store,
 	opts ...Option,
 ) *Server {
 	dist, err := web.Assets()

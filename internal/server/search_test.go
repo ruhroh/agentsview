@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
 	"github.com/wesm/agentsview/internal/config"
@@ -62,7 +63,7 @@ func TestPrepareFTSQuery(t *testing.T) {
 
 // searchSpy captures the SearchFilter passed to Search.
 type searchSpy struct {
-	db.Store
+	*db.DB
 	filter db.SearchFilter
 }
 
@@ -89,7 +90,13 @@ func TestHandleSearchSortParam(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			spy := &searchSpy{}
+			dir := t.TempDir()
+			database, err := db.Open(filepath.Join(dir, "test.db"))
+			if err != nil {
+				t.Fatalf("opening db: %v", err)
+			}
+			t.Cleanup(func() { database.Close() })
+			spy := &searchSpy{DB: database}
 			srv := &Server{
 				cfg: config.Config{Host: "127.0.0.1"},
 				db:  spy,
