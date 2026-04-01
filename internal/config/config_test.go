@@ -439,6 +439,81 @@ func TestSaveGithubToken_PreservesExistingKeys(t *testing.T) {
 	}
 }
 
+func TestSaveShareConfig_PreservesExistingKeys(t *testing.T) {
+	tmp := setupTestEnv(t)
+	cfg := Config{DataDir: tmp}
+
+	writeConfig(t, tmp, map[string]any{
+		"custom_key": "value",
+		"share": map[string]any{
+			"url": "https://existing.example.com",
+		},
+	})
+
+	err := cfg.SaveShareConfig(ShareConfig{
+		Token:     "secret-token",
+		Publisher: "workstation-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(tmp, configFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result map[string]any
+	if _, err := toml.Decode(string(got), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result["custom_key"] != "value" {
+		t.Errorf(
+			"custom_key = %v, want %q",
+			result["custom_key"], "value",
+		)
+	}
+	share, ok := result["share"].(map[string]any)
+	if !ok {
+		t.Fatalf("share = %T, want map[string]any", result["share"])
+	}
+	if share["url"] != "https://existing.example.com" {
+		t.Errorf("share.url = %v, want %q", share["url"], "https://existing.example.com")
+	}
+	if share["token"] != "secret-token" {
+		t.Errorf("share.token = %v, want %q", share["token"], "secret-token")
+	}
+	if share["publisher"] != "workstation-1" {
+		t.Errorf("share.publisher = %v, want %q", share["publisher"], "workstation-1")
+	}
+}
+
+func TestPersistedShareConfig_ReadsOnlyConfigValues(t *testing.T) {
+	tmp := setupTestEnv(t)
+	cfg := Config{DataDir: tmp}
+
+	writeConfig(t, tmp, map[string]any{
+		"share": map[string]any{
+			"url":       "https://share.example.com",
+			"token":     "persisted-token",
+			"publisher": "persisted-publisher",
+		},
+	})
+
+	got, err := cfg.PersistedShareConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.URL != "https://share.example.com" {
+		t.Errorf("URL = %q, want %q", got.URL, "https://share.example.com")
+	}
+	if got.Token != "persisted-token" {
+		t.Errorf("Token = %q, want %q", got.Token, "persisted-token")
+	}
+	if got.Publisher != "persisted-publisher" {
+		t.Errorf("Publisher = %q, want %q", got.Publisher, "persisted-publisher")
+	}
+}
+
 func TestLoadFile_ReadsDirArrays(t *testing.T) {
 	dir := setupTestEnv(t)
 	writeConfig(t, dir, map[string]any{

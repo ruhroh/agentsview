@@ -1039,6 +1039,97 @@ func (c *Config) SaveSettings(patch map[string]any) error {
 			c.RemoteAccess = b
 		}
 	}
+	if v, ok := patch["share"]; ok {
+		if sc, ok := v.(ShareConfig); ok {
+			c.Share = sc
+		} else if m, ok := v.(map[string]any); ok {
+			if s, ok := m["url"].(string); ok {
+				c.Share.URL = s
+			}
+			if s, ok := m["token"].(string); ok {
+				c.Share.Token = s
+			}
+			if s, ok := m["publisher"].(string); ok {
+				c.Share.Publisher = s
+			}
+		}
+	}
+	return nil
+}
+
+// PersistedShareConfig returns the share settings currently present in
+// config.toml. Environment-derived values are not included unless they
+// were already written to the config file.
+func (c *Config) PersistedShareConfig() (ShareConfig, error) {
+	existing, err := c.readConfigMap()
+	if err != nil {
+		return ShareConfig{}, fmt.Errorf("reading config file: %w", err)
+	}
+
+	raw, ok := existing["share"]
+	if !ok {
+		return ShareConfig{}, nil
+	}
+
+	shareMap, ok := raw.(map[string]any)
+	if !ok {
+		return ShareConfig{}, nil
+	}
+
+	var share ShareConfig
+	if s, ok := shareMap["url"].(string); ok {
+		share.URL = s
+	}
+	if s, ok := shareMap["token"].(string); ok {
+		share.Token = s
+	}
+	if s, ok := shareMap["publisher"].(string); ok {
+		share.Publisher = s
+	}
+	return share, nil
+}
+
+// SaveShareConfig persists share settings into the [share] table while
+// preserving unrelated config keys. Empty values are ignored so callers
+// can safely use it to backfill missing persisted fields.
+func (c *Config) SaveShareConfig(share ShareConfig) error {
+	if err := os.MkdirAll(c.DataDir, 0o700); err != nil {
+		return fmt.Errorf("creating data dir: %w", err)
+	}
+
+	existing, err := c.readConfigMap()
+	if err != nil {
+		return fmt.Errorf("reading config file: %w", err)
+	}
+
+	shareMap := make(map[string]any)
+	if raw, ok := existing["share"].(map[string]any); ok {
+		maps.Copy(shareMap, raw)
+	}
+	if share.URL != "" {
+		shareMap["url"] = share.URL
+	}
+	if share.Token != "" {
+		shareMap["token"] = share.Token
+	}
+	if share.Publisher != "" {
+		shareMap["publisher"] = share.Publisher
+	}
+	existing["share"] = shareMap
+
+	if err := c.writeConfigMap(existing); err != nil {
+		return err
+	}
+
+	if share.URL != "" {
+		c.Share.URL = share.URL
+	}
+	if share.Token != "" {
+		c.Share.Token = share.Token
+	}
+	if share.Publisher != "" {
+		c.Share.Publisher = share.Publisher
+	}
 	return nil
 }
 

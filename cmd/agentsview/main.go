@@ -137,6 +137,10 @@ Environment variables:
   AGENTSVIEW_PG_URL       PostgreSQL connection URL for sync
   AGENTSVIEW_PG_MACHINE   Machine name for PG sync
   AGENTSVIEW_PG_SCHEMA    PG schema name (default "agentsview")
+  AGENTSVIEW_SHARE_URL    Share server base URL
+  AGENTSVIEW_SHARE_TOKEN  Share server bearer token
+  AGENTSVIEW_SHARE_PUBLISHER
+                          Publisher/machine name used for shared sessions
 
 Watcher excludes:
   Add "watch_exclude_patterns" to ~/.agentsview/config.toml to skip
@@ -181,6 +185,9 @@ func warnMissingDirs(dirs []string, label string) {
 func runServe(args []string) {
 	start := time.Now()
 	cfg := mustLoadConfig(args)
+	if err := ensureShareConfigOnStartup(&cfg); err != nil {
+		fatal("configuring share settings: %v", err)
+	}
 	setupLogFile(cfg.DataDir)
 
 	if err := validateServeConfig(cfg); err != nil {
