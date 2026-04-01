@@ -28,6 +28,7 @@ const sessionBaseCols = `id, project, machine, agent,
 	message_count, user_message_count,
 	parent_session_id, relationship_type,
 	total_output_tokens, peak_context_tokens,
+	has_total_output_tokens, has_peak_context_tokens,
 	deleted_at, created_at`
 
 // sessionPruneCols extends sessionBaseCols with file metadata
@@ -37,6 +38,7 @@ const sessionPruneCols = `id, project, machine, agent,
 	message_count, user_message_count,
 	parent_session_id, relationship_type,
 	total_output_tokens, peak_context_tokens,
+	has_total_output_tokens, has_peak_context_tokens,
 	deleted_at, file_path, file_size, created_at`
 
 // sessionFullCols includes all columns for a complete session record.
@@ -45,6 +47,7 @@ const sessionFullCols = `id, project, machine, agent,
 	message_count, user_message_count,
 	parent_session_id, relationship_type,
 	total_output_tokens, peak_context_tokens,
+	has_total_output_tokens, has_peak_context_tokens,
 	deleted_at, file_path, file_size, file_mtime,
 	file_hash, local_modified_at, created_at`
 
@@ -70,6 +73,7 @@ func scanSessionRow(rs rowScanner) (Session, error) {
 		&s.MessageCount, &s.UserMessageCount,
 		&s.ParentSessionID, &s.RelationshipType,
 		&s.TotalOutputTokens, &s.PeakContextTokens,
+		&s.HasTotalOutputTokens, &s.HasPeakContextTokens,
 		&s.DeletedAt, &s.CreatedAt,
 	)
 	return s, err
@@ -77,27 +81,29 @@ func scanSessionRow(rs rowScanner) (Session, error) {
 
 // Session represents a row in the sessions table.
 type Session struct {
-	ID                string  `json:"id"`
-	Project           string  `json:"project"`
-	Machine           string  `json:"machine"`
-	Agent             string  `json:"agent"`
-	FirstMessage      *string `json:"first_message"`
-	DisplayName       *string `json:"display_name,omitempty"`
-	StartedAt         *string `json:"started_at"`
-	EndedAt           *string `json:"ended_at"`
-	MessageCount      int     `json:"message_count"`
-	UserMessageCount  int     `json:"user_message_count"`
-	ParentSessionID   *string `json:"parent_session_id,omitempty"`
-	RelationshipType  string  `json:"relationship_type,omitempty"`
-	TotalOutputTokens int     `json:"total_output_tokens"`
-	PeakContextTokens int     `json:"peak_context_tokens"`
-	DeletedAt         *string `json:"deleted_at,omitempty"`
-	FilePath          *string `json:"file_path,omitempty"`
-	FileSize          *int64  `json:"file_size,omitempty"`
-	FileMtime         *int64  `json:"file_mtime,omitempty"`
-	FileHash          *string `json:"file_hash,omitempty"`
-	LocalModifiedAt   *string `json:"local_modified_at,omitempty"`
-	CreatedAt         string  `json:"created_at"`
+	ID                   string  `json:"id"`
+	Project              string  `json:"project"`
+	Machine              string  `json:"machine"`
+	Agent                string  `json:"agent"`
+	FirstMessage         *string `json:"first_message"`
+	DisplayName          *string `json:"display_name,omitempty"`
+	StartedAt            *string `json:"started_at"`
+	EndedAt              *string `json:"ended_at"`
+	MessageCount         int     `json:"message_count"`
+	UserMessageCount     int     `json:"user_message_count"`
+	ParentSessionID      *string `json:"parent_session_id,omitempty"`
+	RelationshipType     string  `json:"relationship_type,omitempty"`
+	TotalOutputTokens    int     `json:"total_output_tokens"`
+	PeakContextTokens    int     `json:"peak_context_tokens"`
+	HasTotalOutputTokens bool    `json:"has_total_output_tokens"`
+	HasPeakContextTokens bool    `json:"has_peak_context_tokens"`
+	DeletedAt            *string `json:"deleted_at,omitempty"`
+	FilePath             *string `json:"file_path,omitempty"`
+	FileSize             *int64  `json:"file_size,omitempty"`
+	FileMtime            *int64  `json:"file_mtime,omitempty"`
+	FileHash             *string `json:"file_hash,omitempty"`
+	LocalModifiedAt      *string `json:"local_modified_at,omitempty"`
+	CreatedAt            string  `json:"created_at"`
 }
 
 // SessionCursor is the opaque pagination token.
@@ -475,6 +481,7 @@ func (db *DB) GetSessionFull(
 		&s.MessageCount, &s.UserMessageCount,
 		&s.ParentSessionID, &s.RelationshipType,
 		&s.TotalOutputTokens, &s.PeakContextTokens,
+		&s.HasTotalOutputTokens, &s.HasPeakContextTokens,
 		&s.DeletedAt, &s.FilePath, &s.FileSize,
 		&s.FileMtime, &s.FileHash, &s.LocalModifiedAt, &s.CreatedAt,
 	)
@@ -534,8 +541,9 @@ func (db *DB) UpsertSession(s Session) error {
 			user_message_count, parent_session_id,
 			relationship_type,
 			total_output_tokens, peak_context_tokens,
+			has_total_output_tokens, has_peak_context_tokens,
 			file_path, file_size, file_mtime, file_hash
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			project = excluded.project,
 			machine = excluded.machine,
@@ -549,6 +557,8 @@ func (db *DB) UpsertSession(s Session) error {
 			relationship_type = excluded.relationship_type,
 			total_output_tokens = excluded.total_output_tokens,
 			peak_context_tokens = excluded.peak_context_tokens,
+			has_total_output_tokens = excluded.has_total_output_tokens,
+			has_peak_context_tokens = excluded.has_peak_context_tokens,
 			file_path = excluded.file_path,
 			file_size = excluded.file_size,
 			file_mtime = excluded.file_mtime,
@@ -558,6 +568,7 @@ func (db *DB) UpsertSession(s Session) error {
 		s.UserMessageCount, s.ParentSessionID,
 		s.RelationshipType,
 		s.TotalOutputTokens, s.PeakContextTokens,
+		s.HasTotalOutputTokens, s.HasPeakContextTokens,
 		s.FilePath, s.FileSize, s.FileMtime, s.FileHash)
 	if err != nil {
 		return fmt.Errorf("upserting session %s: %w", s.ID, err)
@@ -677,12 +688,14 @@ func (db *DB) GetSessionVersion(
 // IncrementalInfo holds the data needed for incremental
 // re-parsing of an append-only session file.
 type IncrementalInfo struct {
-	ID                string
-	FileSize          int64
-	MsgCount          int
-	UserMsgCount      int
-	TotalOutputTokens int
-	PeakContextTokens int
+	ID                   string
+	FileSize             int64
+	MsgCount             int
+	UserMsgCount         int
+	TotalOutputTokens    int
+	PeakContextTokens    int
+	HasTotalOutputTokens bool
+	HasPeakContextTokens bool
 }
 
 // GetSessionForIncremental returns session state needed for
@@ -709,12 +722,14 @@ func (db *DB) GetSessionForIncremental(
 	err = db.getReader().QueryRow(
 		`SELECT id, file_size, message_count,
 			user_message_count,
-			total_output_tokens, peak_context_tokens
+			total_output_tokens, peak_context_tokens,
+			has_total_output_tokens, has_peak_context_tokens
 		 FROM sessions WHERE file_path = ?`,
 		path,
 	).Scan(
 		&info.ID, &fs, &info.MsgCount, &info.UserMsgCount,
 		&info.TotalOutputTokens, &info.PeakContextTokens,
+		&info.HasTotalOutputTokens, &info.HasPeakContextTokens,
 	)
 	if err != nil {
 		return nil, false
@@ -722,6 +737,10 @@ func (db *DB) GetSessionForIncremental(
 	if fs.Valid {
 		info.FileSize = fs.Int64
 	}
+	info.HasTotalOutputTokens =
+		info.HasTotalOutputTokens || info.TotalOutputTokens != 0
+	info.HasPeakContextTokens =
+		info.HasPeakContextTokens || info.PeakContextTokens != 0
 	return &info, true
 }
 
@@ -736,6 +755,7 @@ func (db *DB) UpdateSessionIncremental(
 	msgCount, userMsgCount int,
 	fileSize, fileMtime int64,
 	totalOutputTokens, peakContextTokens int,
+	hasTotalOutputTokens, hasPeakContextTokens bool,
 ) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -748,11 +768,14 @@ func (db *DB) UpdateSessionIncremental(
 			file_size = ?,
 			file_mtime = ?,
 			total_output_tokens = ?,
-			peak_context_tokens = ?
+			peak_context_tokens = ?,
+			has_total_output_tokens = ?,
+			has_peak_context_tokens = ?
 		WHERE id = ?`,
 		endedAt, msgCount, userMsgCount,
 		fileSize, fileMtime,
-		totalOutputTokens, peakContextTokens, id,
+		totalOutputTokens, peakContextTokens,
+		hasTotalOutputTokens, hasPeakContextTokens, id,
 	)
 	if err != nil {
 		return fmt.Errorf(
@@ -1070,6 +1093,7 @@ func (db *DB) FindPruneCandidates(
 			&s.MessageCount, &s.UserMessageCount,
 			&s.ParentSessionID, &s.RelationshipType,
 			&s.TotalOutputTokens, &s.PeakContextTokens,
+			&s.HasTotalOutputTokens, &s.HasPeakContextTokens,
 			&s.DeletedAt, &s.FilePath, &s.FileSize, &s.CreatedAt,
 		)
 		if err != nil {
@@ -1314,6 +1338,7 @@ func (db *DB) ListSessionsModifiedBetween(
 			&s.MessageCount, &s.UserMessageCount,
 			&s.ParentSessionID, &s.RelationshipType,
 			&s.TotalOutputTokens, &s.PeakContextTokens,
+			&s.HasTotalOutputTokens, &s.HasPeakContextTokens,
 			&s.DeletedAt, &s.FilePath, &s.FileSize,
 			&s.FileMtime, &s.FileHash, &s.LocalModifiedAt, &s.CreatedAt,
 		)

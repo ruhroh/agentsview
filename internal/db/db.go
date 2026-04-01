@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 
 	_ "github.com/mattn/go-sqlite3"
+
+	"github.com/wesm/agentsview/internal/parser"
 )
 
 // dataVersion tracks parser changes that require a full
@@ -24,6 +26,8 @@ import (
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 const dataVersion = 7
+
+const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
 //go:embed schema.sql
 var schemaSQL string
@@ -296,12 +300,28 @@ func (db *DB) migrateColumns() error {
 			"ALTER TABLE messages ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0",
 		},
 		{
+			"messages", "has_context_tokens",
+			"ALTER TABLE messages ADD COLUMN has_context_tokens INTEGER NOT NULL DEFAULT 0",
+		},
+		{
+			"messages", "has_output_tokens",
+			"ALTER TABLE messages ADD COLUMN has_output_tokens INTEGER NOT NULL DEFAULT 0",
+		},
+		{
 			"sessions", "total_output_tokens",
 			"ALTER TABLE sessions ADD COLUMN total_output_tokens INTEGER NOT NULL DEFAULT 0",
 		},
 		{
 			"sessions", "peak_context_tokens",
 			"ALTER TABLE sessions ADD COLUMN peak_context_tokens INTEGER NOT NULL DEFAULT 0",
+		},
+		{
+			"sessions", "has_total_output_tokens",
+			"ALTER TABLE sessions ADD COLUMN has_total_output_tokens INTEGER NOT NULL DEFAULT 0",
+		},
+		{
+			"sessions", "has_peak_context_tokens",
+			"ALTER TABLE sessions ADD COLUMN has_peak_context_tokens INTEGER NOT NULL DEFAULT 0",
 		},
 		{
 			"sessions", "local_modified_at",
@@ -335,7 +355,350 @@ func (db *DB) migrateColumns() error {
 			)
 		}
 	}
+	runRepair, err := db.shouldRunTokenCoverageRepairLocked(w)
+	if err != nil {
+		return err
+	}
+	if !runRepair {
+		return nil
+	}
+	if err := db.backfillTokenCoverageFlagsLocked(w); err != nil {
+		return err
+	}
+	if err := db.markTokenCoverageRepairDoneLocked(w); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (db *DB) shouldRunTokenCoverageRepairLocked(
+	w *sql.DB,
+) (bool, error) {
+	var done int
+	if err := w.QueryRow(
+		`SELECT count(*)
+		 FROM stats
+		 WHERE key = ? AND value != 0`,
+		tokenCoverageRepairStatsKey,
+	).Scan(&done); err != nil {
+		return false, fmt.Errorf(
+			"probing token coverage repair marker: %w", err,
+		)
+	}
+	return done == 0, nil
+}
+
+func (db *DB) markTokenCoverageRepairDoneLocked(
+	w *sql.DB,
+) error {
+	if _, err := w.Exec(
+		`INSERT INTO stats (key, value)
+		 VALUES (?, 1)
+		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		tokenCoverageRepairStatsKey,
+	); err != nil {
+		return fmt.Errorf(
+			"storing token coverage repair marker: %w", err,
+		)
+	}
+	return nil
+}
+
+func (db *DB) backfillTokenCoverageFlagsLocked(
+	w *sql.DB,
+) error {
+	msgUpdates, err := db.backfillMessageTokenCoverageLocked(w)
+	if err != nil {
+		return err
+	}
+	sessUpdates, err := db.backfillSessionTokenCoverageLocked(w)
+	if err != nil {
+		return err
+	}
+	if msgUpdates > 0 || sessUpdates > 0 {
+		log.Printf(
+			"migration: backfilled token coverage flags (%d messages, %d sessions)",
+			msgUpdates, sessUpdates,
+		)
+	}
+	return nil
+}
+
+func (db *DB) backfillMessageTokenCoverageLocked(
+	w *sql.DB,
+) (int, error) {
+	candidates, err := db.messageTokenCoverageBackfillCandidatesLocked(w)
+	if err != nil {
+		return 0, err
+	}
+	if len(candidates) == 0 {
+		return 0, nil
+	}
+
+	tx, err := w.Begin()
+	if err != nil {
+		return 0, fmt.Errorf(
+			"beginning message token backfill transaction: %w", err,
+		)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	stmt, err := tx.Prepare(
+		`UPDATE messages
+		 SET has_context_tokens = ?, has_output_tokens = ?
+		 WHERE id = ?`,
+	)
+	if err != nil {
+		return 0, fmt.Errorf(
+			"preparing message token backfill update: %w", err,
+		)
+	}
+	defer stmt.Close()
+
+	for _, candidate := range candidates {
+		if _, err := stmt.Exec(
+			candidate.hasContext, candidate.hasOutput, candidate.id,
+		); err != nil {
+			return 0, fmt.Errorf(
+				"updating message token backfill %d: %w",
+				candidate.id, err,
+			)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf(
+			"committing message token backfill transaction: %w",
+			err,
+		)
+	}
+	return len(candidates), nil
+}
+
+func (db *DB) messageTokenCoverageBackfillCandidatesLocked(
+	w *sql.DB,
+) ([]messageTokenCoverageBackfillCandidate, error) {
+	rows, err := w.Query(
+		`SELECT id, token_usage, context_tokens, output_tokens,
+			has_context_tokens, has_output_tokens
+		 FROM messages
+		 WHERE (has_context_tokens = 0 OR has_output_tokens = 0)
+		   AND (token_usage != ''
+			OR context_tokens != 0
+			OR output_tokens != 0)`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"querying message token backfill candidates: %w", err,
+		)
+	}
+	defer rows.Close()
+
+	var candidates []messageTokenCoverageBackfillCandidate
+	for rows.Next() {
+		var id int64
+		var tokenUsage string
+		var contextTokens, outputTokens int
+		var hasContextTokens, hasOutputTokens bool
+		if err := rows.Scan(
+			&id, &tokenUsage, &contextTokens,
+			&outputTokens, &hasContextTokens,
+			&hasOutputTokens,
+		); err != nil {
+			return nil, fmt.Errorf(
+				"scanning message token backfill candidate: %w", err,
+			)
+		}
+		hasContext, hasOutput := parser.InferTokenPresence(
+			[]byte(tokenUsage), contextTokens, outputTokens,
+			hasContextTokens, hasOutputTokens,
+		)
+		if hasContext == hasContextTokens &&
+			hasOutput == hasOutputTokens {
+			continue
+		}
+		candidates = append(candidates, messageTokenCoverageBackfillCandidate{
+			id:         id,
+			hasContext: hasContext,
+			hasOutput:  hasOutput,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return candidates, nil
+}
+
+type messageTokenCoverageBackfillCandidate struct {
+	id         int64
+	hasContext bool
+	hasOutput  bool
+}
+
+const tokenCoverageBackfillBatchSize = 1000
+
+func (db *DB) backfillSessionTokenCoverageLocked(
+	w *sql.DB,
+) (int, error) {
+	candidates, err := db.loadSessionCoverageCandidates(w)
+	if err != nil {
+		return 0, err
+	}
+	if len(candidates) == 0 {
+		return 0, nil
+	}
+
+	msgCoverage, err := db.batchLoadMessageCoverage(
+		w, candidates,
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	updates := ComputeSessionCoverageUpdates(
+		candidates, msgCoverage,
+	)
+	if len(updates) == 0 {
+		return 0, nil
+	}
+	return db.applySessionCoverageUpdates(w, updates)
+}
+
+func (db *DB) loadSessionCoverageCandidates(
+	w *sql.DB,
+) ([]SessionCoverageCandidate, error) {
+	rows, err := w.Query(
+		`SELECT id, total_output_tokens, peak_context_tokens,
+			has_total_output_tokens, has_peak_context_tokens
+		 FROM sessions
+		 WHERE has_total_output_tokens = 0
+		    OR has_peak_context_tokens = 0`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"querying session token backfill candidates: %w", err,
+		)
+	}
+	defer rows.Close()
+
+	var candidates []SessionCoverageCandidate
+	for rows.Next() {
+		var c SessionCoverageCandidate
+		if err := rows.Scan(
+			&c.ID, &c.TotalOutputTokens,
+			&c.PeakContextTokens, &c.HasTotal, &c.HasPeak,
+		); err != nil {
+			return nil, fmt.Errorf(
+				"scanning session token backfill candidate: %w",
+				err,
+			)
+		}
+		candidates = append(candidates, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return candidates, nil
+}
+
+func (db *DB) batchLoadMessageCoverage(
+	w *sql.DB,
+	candidates []SessionCoverageCandidate,
+) (map[string][2]bool, error) {
+	coverage := map[string][2]bool{}
+	for start := 0; start < len(candidates); start += tokenCoverageBackfillBatchSize {
+		end := min(
+			start+tokenCoverageBackfillBatchSize,
+			len(candidates),
+		)
+		batch := candidates[start:end]
+		args := make([]any, len(batch))
+		placeholders := make([]string, len(batch))
+		for i, c := range batch {
+			args[i] = c.ID
+			placeholders[i] = "?"
+		}
+		rows, err := w.Query(
+			`SELECT session_id, has_context_tokens,
+				has_output_tokens
+			 FROM messages
+			 WHERE session_id IN (`+strings.Join(placeholders, ",")+`)`,
+			args...,
+		)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"querying message coverage: %w", err,
+			)
+		}
+		for rows.Next() {
+			var sessionID string
+			var hasContext, hasOutput bool
+			if err := rows.Scan(
+				&sessionID, &hasContext, &hasOutput,
+			); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf(
+					"scanning message coverage: %w", err,
+				)
+			}
+			entry := coverage[sessionID]
+			entry[0] = entry[0] || hasContext
+			entry[1] = entry[1] || hasOutput
+			coverage[sessionID] = entry
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if err := rows.Close(); err != nil {
+			return nil, err
+		}
+	}
+	return coverage, nil
+}
+
+func (db *DB) applySessionCoverageUpdates(
+	w *sql.DB,
+	updates []SessionCoverageUpdate,
+) (int, error) {
+	tx, err := w.Begin()
+	if err != nil {
+		return 0, fmt.Errorf(
+			"beginning session token backfill transaction: %w",
+			err,
+		)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	stmt, err := tx.Prepare(
+		`UPDATE sessions
+		 SET has_total_output_tokens = ?,
+		     has_peak_context_tokens = ?
+		 WHERE id = ?`,
+	)
+	if err != nil {
+		return 0, fmt.Errorf(
+			"preparing session token backfill update: %w", err,
+		)
+	}
+	defer stmt.Close()
+
+	for _, u := range updates {
+		if _, err := stmt.Exec(
+			u.HasTotal, u.HasPeak, u.ID,
+		); err != nil {
+			return 0, fmt.Errorf(
+				"updating session token backfill %s: %w",
+				u.ID, err,
+			)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf(
+			"committing session token backfill transaction: %w",
+			err,
+		)
+	}
+	return len(updates), nil
 }
 
 // NeedsResync reports whether the database was opened with a

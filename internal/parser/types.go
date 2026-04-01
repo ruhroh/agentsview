@@ -282,8 +282,14 @@ type ParsedSession struct {
 	UserMessageCount int
 	File             FileInfo
 
-	TotalOutputTokens int
-	PeakContextTokens int
+	TotalOutputTokens    int
+	PeakContextTokens    int
+	HasTotalOutputTokens bool
+	HasPeakContextTokens bool
+
+	// aggregateTokenPresenceKnown marks session aggregate token
+	// coverage as parser-owned and authoritative.
+	aggregateTokenPresenceKnown bool
 }
 
 // ParsedToolCall holds a single tool invocation extracted from
@@ -331,10 +337,114 @@ type ParsedMessage struct {
 	ToolCalls     []ParsedToolCall
 	ToolResults   []ParsedToolResult
 
-	Model         string
-	TokenUsage    json.RawMessage
-	ContextTokens int
-	OutputTokens  int
+	Model            string
+	TokenUsage       json.RawMessage
+	ContextTokens    int
+	OutputTokens     int
+	HasContextTokens bool
+	HasOutputTokens  bool
+
+	// tokenPresenceKnown marks per-message token coverage as
+	// parser-owned and authoritative.
+	tokenPresenceKnown bool
+}
+
+// accumulateMessageTokenUsage rolls up explicit per-message token
+// metadata into session totals without inferring presence from raw
+// numeric values alone.
+func accumulateMessageTokenUsage(
+	sess *ParsedSession,
+	messages []ParsedMessage,
+) {
+	sess.aggregateTokenPresenceKnown = true
+	for _, m := range messages {
+		if m.HasOutputTokens {
+			sess.HasTotalOutputTokens = true
+			sess.TotalOutputTokens += m.OutputTokens
+		}
+		if m.HasContextTokens {
+			sess.HasPeakContextTokens = true
+			if m.ContextTokens > sess.PeakContextTokens {
+				sess.PeakContextTokens = m.ContextTokens
+			}
+		}
+	}
+}
+
+// InferTokenPresence determines whether context/output tokens were
+// present in a provider payload. It starts from explicit boolean
+// flags (and non-zero numeric values), then inspects tokenUsage JSON
+// keys when available. This is the single source of truth for token
+// presence inference across all storage backends.
+func InferTokenPresence(
+	tokenUsage []byte,
+	contextTokens, outputTokens int,
+	hasContext, hasOutput bool,
+) (bool, bool) {
+	hasContext = hasContext || contextTokens != 0
+	hasOutput = hasOutput || outputTokens != 0
+
+	if len(tokenUsage) == 0 {
+		return hasContext, hasOutput
+	}
+
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(tokenUsage, &payload); err != nil {
+		return hasContext, hasOutput
+	}
+
+	for key := range payload {
+		switch key {
+		case "input_tokens", "cache_creation_input_tokens",
+			"cache_read_input_tokens", "input",
+			"cached", "context_tokens":
+			hasContext = true
+		case "output_tokens", "output":
+			hasOutput = true
+		}
+	}
+	return hasContext, hasOutput
+}
+
+// TokenPresence reports whether context/output token fields were
+// present in the provider payload. Falls back to raw token_usage
+// key inspection when parser-specific flags were not populated.
+func (m ParsedMessage) TokenPresence() (bool, bool) {
+	if m.tokenPresenceKnown {
+		return m.HasContextTokens, m.HasOutputTokens
+	}
+	return InferTokenPresence(
+		m.TokenUsage, m.ContextTokens, m.OutputTokens,
+		m.HasContextTokens, m.HasOutputTokens,
+	)
+}
+
+// AggregateTokenPresence reports whether aggregate session token
+// metrics were present. This preserves explicit flags and falls
+// back to non-zero aggregates for providers like Kimi that only
+// expose truthful session-level totals in current Task 1 paths.
+func (s ParsedSession) AggregateTokenPresence() (bool, bool) {
+	if s.aggregateTokenPresenceKnown {
+		return s.HasTotalOutputTokens, s.HasPeakContextTokens
+	}
+
+	return s.HasTotalOutputTokens || s.TotalOutputTokens > 0,
+		s.HasPeakContextTokens || s.PeakContextTokens > 0
+}
+
+// TokenCoverage reports the truthful aggregate/session coverage
+// after combining session-level aggregate presence with per-message
+// token presence.
+func (s ParsedSession) TokenCoverage(
+	msgs []ParsedMessage,
+) (bool, bool) {
+	hasTotal, hasPeak := s.AggregateTokenPresence()
+	for _, m := range msgs {
+		msgHasCtx, msgHasOut := m.TokenPresence()
+		hasTotal = hasTotal || msgHasOut
+		hasPeak = hasPeak || msgHasCtx
+	}
+	return hasTotal, hasPeak
 }
 
 // ParseResult pairs a parsed session with its messages.
