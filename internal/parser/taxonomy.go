@@ -116,6 +116,29 @@ func NormalizeToolCategory(rawName string) string {
 	case "subagents", "agents_list", "session_status":
 		return "Task"
 
+	// Hermes Agent tools (excluding names already handled above:
+	// read_file→Read, write_file→Write, search_files→Grep,
+	// edit_file→Edit, run_command/execute_command→Bash)
+	case "patch":
+		return "Edit"
+	case "terminal":
+		return "Bash"
+	case "browser_navigate", "browser_snapshot", "browser_click",
+		"browser_type", "browser_scroll", "browser_press",
+		"browser_back", "browser_close", "browser_vision",
+		"browser_console", "browser_get_images":
+		return "Tool"
+	case "vision_analyze":
+		return "Read"
+	case "delegate_task":
+		return "Task"
+	case "execute_code":
+		return "Bash"
+	case "todo", "memory", "session_search", "skill_view",
+		"skills_list", "skill_manage", "clarify",
+		"text_to_speech", "cronjob":
+		return "Tool"
+
 	// Zencoder tools (not already covered above)
 	case "WebFetch":
 		return "Read"
@@ -125,6 +148,28 @@ func NormalizeToolCategory(rawName string) string {
 		return "Task"
 	case "zencoder-rag-mcp__web_search":
 		return "Read"
+
+	// ChatGPT tools
+	case "code_interpreter":
+		return "Bash"
+
+	// Warp tools
+	case "read_files":
+		return "Read"
+	case "apply_file_diff":
+		return "Edit"
+	case "search_codebase":
+		return "Grep"
+	case "call_mcp_tool", "read_mcp_resource":
+		return "Tool"
+	case "suggest_plan", "suggest_create_plan":
+		return "Tool"
+	case "write_to_long_running_shell_command":
+		return "Bash"
+	case "read_shell_command_output":
+		return "Read"
+	case "use_computer":
+		return "Tool"
 
 	default:
 		// MCP tools may carry a server prefix (e.g.

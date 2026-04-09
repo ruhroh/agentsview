@@ -56,10 +56,12 @@ type ProxyConfig struct {
 
 // PGConfig holds PostgreSQL connection settings.
 type PGConfig struct {
-	URL           string `toml:"url" json:"url"`
-	Schema        string `toml:"schema" json:"schema"`
-	MachineName   string `toml:"machine_name" json:"machine_name"`
-	AllowInsecure bool   `toml:"allow_insecure" json:"allow_insecure"`
+	URL             string   `toml:"url" json:"url"`
+	Schema          string   `toml:"schema" json:"schema"`
+	MachineName     string   `toml:"machine_name" json:"machine_name"`
+	AllowInsecure   bool     `toml:"allow_insecure" json:"allow_insecure"`
+	Projects        []string `toml:"projects" json:"projects,omitempty"`
+	ExcludeProjects []string `toml:"exclude_projects" json:"exclude_projects,omitempty"`
 }
 
 // ShareConfig holds settings for publishing sessions to a hosted server.
@@ -85,6 +87,8 @@ type Config struct {
 	AuthToken            string         `json:"auth_token,omitempty" toml:"auth_token"`
 	RemoteAccess         bool           `json:"remote_access" toml:"remote_access"`
 	NoBrowser            bool           `json:"no_browser" toml:"no_browser"`
+	DisableUpdateCheck   bool           `json:"disable_update_check" toml:"disable_update_check"`
+	NoSync               bool           `json:"-" toml:"-"`
 	PG                   PGConfig       `json:"pg,omitempty" toml:"pg"`
 	Share                ShareConfig    `json:"share,omitempty" toml:"share"`
 	WriteTimeout         time.Duration  `json:"-" toml:"-"`
@@ -306,6 +310,7 @@ func (c *Config) loadFile() error {
 		Terminal                       TerminalConfig `toml:"terminal"`
 		AuthToken                      string         `toml:"auth_token"`
 		RemoteAccess                   bool           `toml:"remote_access"`
+		DisableUpdateCheck             bool           `toml:"disable_update_check"`
 		PG                             PGConfig       `toml:"pg"`
 		Share                          ShareConfig    `toml:"share"`
 	}
@@ -343,6 +348,7 @@ func (c *Config) loadFile() error {
 		c.AuthToken = file.AuthToken
 	}
 	c.RemoteAccess = file.RemoteAccess
+	c.DisableUpdateCheck = file.DisableUpdateCheck
 	// Merge pg field-by-field so env vars override only
 	// the fields they set, preserving config-file settings.
 	if file.PG.URL != "" && c.PG.URL == "" {
@@ -356,6 +362,12 @@ func (c *Config) loadFile() error {
 	}
 	if file.PG.AllowInsecure {
 		c.PG.AllowInsecure = true
+	}
+	if file.PG.Projects != nil && c.PG.Projects == nil {
+		c.PG.Projects = file.PG.Projects
+	}
+	if file.PG.ExcludeProjects != nil && c.PG.ExcludeProjects == nil {
+		c.PG.ExcludeProjects = file.PG.ExcludeProjects
 	}
 	// Merge share config field-by-field so env vars override
 	// only the fields they set, preserving config-file settings.
@@ -497,6 +509,9 @@ func (c *Config) loadEnv() {
 	if v := os.Getenv("AGENTSVIEW_SHARE_PUBLISHER"); v != "" {
 		c.Share.Publisher = v
 	}
+	if v := os.Getenv("AGENTSVIEW_DISABLE_UPDATE_CHECK"); v != "" {
+		c.DisableUpdateCheck = v == "1" || v == "true"
+	}
 }
 
 type stringListFlag []string
@@ -563,6 +578,14 @@ func RegisterServeFlags(fs *flag.FlagSet) {
 		"no-browser", false,
 		"Don't open browser on startup",
 	)
+	fs.Bool(
+		"no-sync", false,
+		"Skip initial sync and disable background sync/file watching",
+	)
+	fs.Bool(
+		"no-update-check", false,
+		"Disable the update check API endpoint",
+	)
 }
 
 // applyFlags copies explicitly-set flags from fs into cfg.
@@ -598,6 +621,10 @@ func applyFlags(cfg *Config, fs *flag.FlagSet) {
 			cfg.Proxy.AllowedSubnets = splitFlagList(f.Value.String())
 		case "no-browser":
 			cfg.NoBrowser = f.Value.String() == "true"
+		case "no-sync":
+			cfg.NoSync = f.Value.String() == "true"
+		case "no-update-check":
+			cfg.DisableUpdateCheck = f.Value.String() == "true"
 		}
 	})
 }

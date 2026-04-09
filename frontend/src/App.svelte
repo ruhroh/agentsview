@@ -145,7 +145,12 @@
         );
         if (msg && !thinkingVisible) {
           const segs = enrichSegments(
-            parseContent(msg.content, msg.has_tool_use),
+            parseContent(
+              msg.content,
+              msg.has_tool_use,
+              msg.id,
+              msg.content_length,
+            ),
             msg.tool_calls,
           );
           const hasThinkingSegment = segs.some(
@@ -272,7 +277,8 @@
     if (f.minMessages > 0) p.min_messages = String(f.minMessages);
     if (f.maxMessages > 0) p.max_messages = String(f.maxMessages);
     if (f.minUserMessages > 0) p.min_user_messages = String(f.minUserMessages);
-    if (f.includeOneShot) p.include_one_shot = "true";
+    if (!f.includeOneShot) p.include_one_shot = "false";
+    if (f.includeAutomated) p.include_automated = "true";
     return p;
   }
 

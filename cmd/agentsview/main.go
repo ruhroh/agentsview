@@ -54,6 +54,12 @@ func main() {
 		case "token-use":
 			runTokenUse(os.Args[2:])
 			return
+		case "import":
+			runImport(os.Args[2:])
+			return
+		case "projects":
+			runProjects(os.Args[2:])
+			return
 		case "version", "--version", "-v":
 			fmt.Printf("agentsview %s (commit %s, built %s)\n",
 				version, commit, buildDate)
@@ -83,6 +89,9 @@ Usage:
   agentsview pg serve [flags] Serve from PostgreSQL (read-only)
   agentsview token-use <id>   Show token usage for a session (JSON)
   agentsview prune [flags]    Delete sessions matching filters
+  agentsview import --type <type> <path>
+                          Import conversations (claude-ai, chatgpt)
+  agentsview projects [flags] List projects with session counts
   agentsview update [flags]   Check for and install updates
   agentsview version          Show version information
   agentsview help             Show this help
@@ -106,6 +115,9 @@ Sync flags:
 
 PG push flags:
   -full              Bypass per-message skip heuristic
+  -projects string   Comma-separated projects to push (inclusive)
+  -exclude-projects string  Comma-separated projects to exclude from push
+  -all-projects      Ignore configured project filters for this run
 
 PG serve flags:
   -host string       Host to bind to (default "127.0.0.1")
@@ -118,6 +130,9 @@ Prune flags:
   -first-message str  Sessions whose first message starts with this text
   -dry-run            Show what would be pruned without deleting
   -yes                Skip confirmation prompt
+
+Projects flags:
+  -json              Output as JSON array
 
 Update flags:
   -check              Check for updates without installing
@@ -221,27 +236,30 @@ func runServe(args []string) {
 	)
 	defer stop()
 
-	engine := sync.NewEngine(database, sync.EngineConfig{
-		AgentDirs:               cfg.AgentDirs,
-		Machine:                 "local",
-		BlockedResultCategories: cfg.ResultContentBlockedCategories,
-	})
+	var engine *sync.Engine
+	if !cfg.NoSync {
+		engine = sync.NewEngine(database, sync.EngineConfig{
+			AgentDirs:               cfg.AgentDirs,
+			Machine:                 "local",
+			BlockedResultCategories: cfg.ResultContentBlockedCategories,
+		})
 
-	if database.NeedsResync() {
-		runInitialResync(ctx, engine)
-	} else {
-		runInitialSync(ctx, engine)
-	}
-	if ctx.Err() != nil {
-		return
-	}
+		if database.NeedsResync() {
+			runInitialResync(ctx, engine)
+		} else {
+			runInitialSync(ctx, engine)
+		}
+		if ctx.Err() != nil {
+			return
+		}
 
-	stopWatcher, unwatchedDirs := startFileWatcher(cfg, engine)
-	defer stopWatcher()
+		stopWatcher, unwatchedDirs := startFileWatcher(cfg, engine)
+		defer stopWatcher()
 
-	go startPeriodicSync(engine)
-	if len(unwatchedDirs) > 0 {
-		go startUnwatchedPoll(engine)
+		go startPeriodicSync(engine)
+		if len(unwatchedDirs) > 0 {
+			go startUnwatchedPoll(engine)
+		}
 	}
 
 	// Auto-bind to 0.0.0.0 when remote access is enabled so the
@@ -321,6 +339,7 @@ func runServe(args []string) {
 			time.Since(start).Round(time.Millisecond),
 		)
 	}
+	fmt.Printf("Database: %s\n", cfg.DBPath)
 
 	if err := waitForServerRuntime(ctx, srv, rt); err != nil {
 		fatal("%v", err)

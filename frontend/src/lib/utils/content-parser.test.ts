@@ -7,11 +7,13 @@ import {
 } from "./content-parser.js";
 import type { Message, ToolCall } from "../api/types.js";
 
+let nextId = 1;
+
 function makeMsg(
   overrides: Partial<Message> & { content: string },
 ): Message {
   const defaults: Message = {
-    id: 1,
+    id: nextId++,
     session_id: "s1",
     ordinal: 0,
     role: "assistant",

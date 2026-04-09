@@ -44,6 +44,7 @@ func TestEnsureSchemaIdempotent(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
+		SyncOptions{},
 	)
 	if err != nil {
 		t.Fatalf("creating sync: %v", err)
@@ -172,6 +173,7 @@ func TestPushSingleSession(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
+		SyncOptions{},
 	)
 	if err != nil {
 		t.Fatalf("creating sync: %v", err)
@@ -271,6 +273,7 @@ func TestPushIdempotent(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
+		SyncOptions{},
 	)
 	if err != nil {
 		t.Fatalf("creating sync: %v", err)
@@ -327,6 +330,7 @@ func TestPushWithToolCalls(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
+		SyncOptions{},
 	)
 	if err != nil {
 		t.Fatalf("creating sync: %v", err)
@@ -413,6 +417,7 @@ func TestPushWithToolResultEvents(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
+		SyncOptions{},
 	)
 	if err != nil {
 		t.Fatalf("creating sync: %v", err)
@@ -492,6 +497,7 @@ func TestStatus(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
+		SyncOptions{},
 	)
 	if err != nil {
 		t.Fatalf("creating sync: %v", err)
@@ -530,6 +536,7 @@ func TestStatusMissingSchema(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
+		SyncOptions{},
 	)
 	if err != nil {
 		t.Fatalf("creating sync: %v", err)
@@ -566,6 +573,7 @@ func TestNewRejectsMachineLocal(t *testing.T) {
 	local := testDB(t)
 	_, err := New(
 		pgURL, "agentsview", local, "local", true,
+		SyncOptions{},
 	)
 	if err == nil {
 		t.Fatal("expected error for machine=local")
@@ -577,6 +585,7 @@ func TestNewRejectsEmptyMachine(t *testing.T) {
 	local := testDB(t)
 	_, err := New(
 		pgURL, "agentsview", local, "", true,
+		SyncOptions{},
 	)
 	if err == nil {
 		t.Fatal("expected error for empty machine")
@@ -587,6 +596,7 @@ func TestNewRejectsEmptyURL(t *testing.T) {
 	local := testDB(t)
 	_, err := New(
 		"", "agentsview", local, "test", true,
+		SyncOptions{},
 	)
 	if err == nil {
 		t.Fatal("expected error for empty URL")
@@ -602,6 +612,7 @@ func TestPushUpdatedAtFormat(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
+		SyncOptions{},
 	)
 	if err != nil {
 		t.Fatalf("creating sync: %v", err)
@@ -663,6 +674,7 @@ func TestPushBumpsUpdatedAtOnMessageRewrite(
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"machine-a", true,
+		SyncOptions{},
 	)
 	if err != nil {
 		t.Fatalf("creating sync: %v", err)
@@ -751,6 +763,7 @@ func TestPushFullBypassesHeuristic(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
+		SyncOptions{},
 	)
 	if err != nil {
 		t.Fatalf("creating sync: %v", err)
@@ -822,6 +835,7 @@ func TestPushDetectsSchemaReset(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
+		SyncOptions{},
 	)
 	if err != nil {
 		t.Fatalf("creating sync: %v", err)
@@ -904,6 +918,7 @@ func TestPushFullAfterSchemaDropRecreatesSchema(
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
+		SyncOptions{},
 	)
 	if err != nil {
 		t.Fatalf("creating sync: %v", err)
@@ -958,6 +973,7 @@ func TestPushBatchesMultipleSessions(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
+		SyncOptions{},
 	)
 	if err != nil {
 		t.Fatalf("creating sync: %v", err)
@@ -1060,6 +1076,7 @@ func TestPushBulkInsertManyMessages(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
+		SyncOptions{},
 	)
 	if err != nil {
 		t.Fatalf("creating sync: %v", err)
@@ -1179,6 +1196,7 @@ func TestPushSimplePK(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
+		SyncOptions{},
 	)
 	if err != nil {
 		t.Fatalf("creating sync: %v", err)
@@ -1226,5 +1244,285 @@ func TestPushSimplePK(t *testing.T) {
 				"want PRIMARY KEY (session_id, ordinal)",
 			constraintDef,
 		)
+	}
+}
+
+func TestPushFilteredByProject(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanPGSchema(t, pgURL)
+	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+
+	local := testDB(t)
+
+	// Seed three sessions across three projects.
+	for _, s := range []db.Session{
+		{
+			ID: "s-alpha", Project: "alpha",
+			Machine: "local", Agent: "claude",
+			MessageCount: 1,
+		},
+		{
+			ID: "s-beta", Project: "beta",
+			Machine: "local", Agent: "claude",
+			MessageCount: 1,
+		},
+		{
+			ID: "s-gamma", Project: "gamma",
+			Machine: "local", Agent: "claude",
+			MessageCount: 1,
+		},
+	} {
+		if err := local.UpsertSession(s); err != nil {
+			t.Fatalf("upsert %s: %v", s.ID, err)
+		}
+		if err := local.InsertMessages([]db.Message{
+			{
+				SessionID: s.ID, Ordinal: 0,
+				Role: "user", Content: "msg " + s.ID,
+			},
+		}); err != nil {
+			t.Fatalf("insert msg %s: %v", s.ID, err)
+		}
+	}
+
+	ctx := context.Background()
+
+	// Step 1: push with project filter = ["alpha"].
+	filtered, err := New(
+		pgURL, "agentsview", local,
+		"test-machine", true,
+		SyncOptions{Projects: []string{"alpha"}},
+	)
+	if err != nil {
+		t.Fatalf("creating filtered sync: %v", err)
+	}
+	defer filtered.Close()
+
+	if err := filtered.EnsureSchema(ctx); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	r1, err := filtered.Push(ctx, false)
+	if err != nil {
+		t.Fatalf("filtered push: %v", err)
+	}
+	if r1.SessionsPushed != 1 {
+		t.Fatalf(
+			"filtered push: sessions = %d, want 1",
+			r1.SessionsPushed,
+		)
+	}
+
+	// Verify only alpha is in PG.
+	pgSessionCount := func(project string) int {
+		t.Helper()
+		var n int
+		err := filtered.pg.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM sessions "+
+				"WHERE project = $1",
+			project,
+		).Scan(&n)
+		if err != nil {
+			t.Fatalf("count %s: %v", project, err)
+		}
+		return n
+	}
+	if n := pgSessionCount("alpha"); n != 1 {
+		t.Errorf("alpha count = %d, want 1", n)
+	}
+	if n := pgSessionCount("beta"); n != 0 {
+		t.Errorf("beta count = %d, want 0", n)
+	}
+	if n := pgSessionCount("gamma"); n != 0 {
+		t.Errorf("gamma count = %d, want 0", n)
+	}
+
+	// Step 2: push unfiltered — beta and gamma should arrive.
+	unfiltered, err := New(
+		pgURL, "agentsview", local,
+		"test-machine", true,
+		SyncOptions{},
+	)
+	if err != nil {
+		t.Fatalf("creating unfiltered sync: %v", err)
+	}
+	defer unfiltered.Close()
+
+	r2, err := unfiltered.Push(ctx, false)
+	if err != nil {
+		t.Fatalf("unfiltered push: %v", err)
+	}
+	if r2.SessionsPushed < 2 {
+		t.Fatalf(
+			"unfiltered push: sessions = %d, want >= 2",
+			r2.SessionsPushed,
+		)
+	}
+
+	// Verify all three projects are in PG.
+	for _, p := range []string{"alpha", "beta", "gamma"} {
+		if n := pgSessionCount(p); n != 1 {
+			t.Errorf("%s count = %d, want 1", p, n)
+		}
+	}
+
+	// Step 3: second filtered push is a no-op (fingerprints
+	// match).
+	r3, err := filtered.Push(ctx, false)
+	if err != nil {
+		t.Fatalf("second filtered push: %v", err)
+	}
+	if r3.SessionsPushed != 0 {
+		t.Errorf(
+			"second filtered push: sessions = %d, want 0",
+			r3.SessionsPushed,
+		)
+	}
+}
+
+func TestPushExcludeProject(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanPGSchema(t, pgURL)
+	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+
+	local := testDB(t)
+
+	for _, s := range []db.Session{
+		{
+			ID: "s-a", Project: "alpha",
+			Machine: "local", Agent: "claude",
+			MessageCount: 1,
+		},
+		{
+			ID: "s-b", Project: "beta",
+			Machine: "local", Agent: "claude",
+			MessageCount: 1,
+		},
+	} {
+		if err := local.UpsertSession(s); err != nil {
+			t.Fatalf("upsert %s: %v", s.ID, err)
+		}
+		if err := local.InsertMessages([]db.Message{
+			{
+				SessionID: s.ID, Ordinal: 0,
+				Role: "user", Content: "msg",
+			},
+		}); err != nil {
+			t.Fatalf("insert msg %s: %v", s.ID, err)
+		}
+	}
+
+	ctx := context.Background()
+
+	ps, err := New(
+		pgURL, "agentsview", local,
+		"test-machine", true,
+		SyncOptions{ExcludeProjects: []string{"beta"}},
+	)
+	if err != nil {
+		t.Fatalf("creating sync: %v", err)
+	}
+	defer ps.Close()
+
+	if err := ps.EnsureSchema(ctx); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	r, err := ps.Push(ctx, false)
+	if err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	if r.SessionsPushed != 1 {
+		t.Fatalf("sessions = %d, want 1", r.SessionsPushed)
+	}
+
+	var pgProject string
+	err = ps.pg.QueryRowContext(ctx,
+		"SELECT project FROM sessions LIMIT 1",
+	).Scan(&pgProject)
+	if err != nil {
+		t.Fatalf("query pg: %v", err)
+	}
+	if pgProject != "alpha" {
+		t.Errorf("project = %q, want alpha", pgProject)
+	}
+}
+
+func TestPushFilteredFullIsIncremental(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanPGSchema(t, pgURL)
+	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+
+	local := testDB(t)
+
+	if err := local.UpsertSession(db.Session{
+		ID: "s1", Project: "alpha",
+		Machine: "local", Agent: "claude",
+		MessageCount: 1,
+	}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if err := local.InsertMessages([]db.Message{
+		{
+			SessionID: "s1", Ordinal: 0,
+			Role: "user", Content: "hello",
+		},
+	}); err != nil {
+		t.Fatalf("insert msg: %v", err)
+	}
+
+	ctx := context.Background()
+	ps, err := New(
+		pgURL, "agentsview", local,
+		"test-machine", true,
+		SyncOptions{Projects: []string{"alpha"}},
+	)
+	if err != nil {
+		t.Fatalf("creating sync: %v", err)
+	}
+	defer ps.Close()
+
+	if err := ps.EnsureSchema(ctx); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+
+	// First push with --full.
+	r1, err := ps.Push(ctx, true)
+	if err != nil {
+		t.Fatalf("first push: %v", err)
+	}
+	if r1.SessionsPushed != 1 {
+		t.Fatalf("first push: sessions = %d, want 1",
+			r1.SessionsPushed)
+	}
+
+	// Filtered --full must not advance the global watermark.
+	wm, err := local.GetSyncState("last_push_at")
+	if err != nil {
+		t.Fatalf("reading watermark: %v", err)
+	}
+	if wm != "" {
+		t.Errorf("watermark after filtered --full = %q, "+
+			"want empty", wm)
+	}
+
+	// Boundary fingerprints must have been written.
+	bs, err := local.GetSyncState(
+		"last_push_boundary_state",
+	)
+	if err != nil {
+		t.Fatalf("reading boundary state: %v", err)
+	}
+	if bs == "" {
+		t.Fatal("boundary state empty after filtered --full")
+	}
+
+	// Second push (not --full) should be a no-op because
+	// fingerprints were persisted after the filtered --full.
+	r2, err := ps.Push(ctx, false)
+	if err != nil {
+		t.Fatalf("second push: %v", err)
+	}
+	if r2.SessionsPushed != 0 {
+		t.Errorf("second push: sessions = %d, want 0",
+			r2.SessionsPushed)
 	}
 }

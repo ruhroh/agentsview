@@ -347,23 +347,19 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
-	// Cursor: <cursorDir>/<project>/agent-transcripts/<uuid>.{txt,jsonl}
+	// Cursor:
+	//   <cursorDir>/<project>/agent-transcripts/<uuid>.{txt,jsonl}
+	//   <cursorDir>/<project>/agent-transcripts/<uuid>/<uuid>.{txt,jsonl}
 	for _, cursorDir := range e.agentDirs[parser.AgentCursor] {
 		if cursorDir == "" {
 			continue
 		}
 		if rel, ok := isUnder(cursorDir, path); ok {
-			parts := strings.Split(rel, sep)
-			if len(parts) != 3 {
+			projectDir, ok := parser.ParseCursorTranscriptRelPath(rel)
+			if !ok {
 				continue
 			}
-			if parts[1] != "agent-transcripts" {
-				continue
-			}
-			if !parser.IsCursorTranscriptExt(parts[2]) {
-				continue
-			}
-			project := parser.DecodeCursorProjectDir(parts[0])
+			project := parser.DecodeCursorProjectDir(projectDir)
 			if project == "" {
 				project = "unknown"
 			}
@@ -557,6 +553,43 @@ func (e *Engine) classifyOnePath(
 				Path:  path,
 				Agent: parser.AgentOpenClaw,
 			}, true
+		}
+	}
+
+	// Cortex: <cortexDir>/<uuid>.json
+	//     or: <cortexDir>/<uuid>.history.jsonl → remap to .json
+	for _, cortexDir := range e.agentDirs[parser.AgentCortex] {
+		if cortexDir == "" {
+			continue
+		}
+		if rel, ok := isUnder(cortexDir, path); ok {
+			if strings.Count(rel, sep) != 0 {
+				continue
+			}
+			name := filepath.Base(rel)
+
+			// .history.jsonl companion → remap to .json metadata.
+			if stem, ok := strings.CutSuffix(
+				name, ".history.jsonl",
+			); ok {
+				jsonPath := filepath.Join(
+					cortexDir, stem+".json",
+				)
+				if parser.IsCortexSessionFile(stem + ".json") {
+					return parser.DiscoveredFile{
+						Path:  jsonPath,
+						Agent: parser.AgentCortex,
+					}, true
+				}
+				continue
+			}
+
+			if parser.IsCortexSessionFile(name) {
+				return parser.DiscoveredFile{
+					Path:  path,
+					Agent: parser.AgentCortex,
+				}, true
+			}
 		}
 	}
 
@@ -970,6 +1003,47 @@ func (e *Engine) syncAllLocked(
 		return stats
 	}
 
+	// Sync Warp sessions (DB-backed, not file-based).
+	tWarp := time.Now()
+	warpPending := e.syncWarp(ctx)
+	if len(warpPending) > 0 {
+		stats.TotalSessions += len(warpPending)
+		tWrite := time.Now()
+		var warpWritten int
+		for _, pw := range warpPending {
+			if ctx.Err() != nil {
+				break
+			}
+			switch err := e.writeSessionFull(pw); {
+			case err == nil:
+				warpWritten++
+			case errors.Is(err, db.ErrSessionExcluded):
+				// Intentional skip, not a failure.
+			default:
+				stats.RecordFailed()
+			}
+		}
+		stats.RecordSynced(warpWritten)
+		if verbose {
+			log.Printf(
+				"warp write: %d sessions in %s",
+				len(warpPending),
+				time.Since(tWrite).Round(time.Millisecond),
+			)
+		}
+	}
+	if verbose {
+		log.Printf(
+			"warp sync: %s",
+			time.Since(tWarp).Round(time.Millisecond),
+		)
+	}
+
+	if ctx.Err() != nil {
+		stats.Aborted = true
+		return stats
+	}
+
 	tPersist := time.Now()
 	skipCount := e.persistSkipCache()
 	if verbose {
@@ -1303,6 +1377,14 @@ func (e *Engine) processFile(
 		res = e.processOpenClaw(file, info)
 	case parser.AgentKimi:
 		res = e.processKimi(file, info)
+	case parser.AgentKiro:
+		res = e.processKiro(file, info)
+	case parser.AgentKiroIDE:
+		res = e.processKiroIDE(file, info)
+	case parser.AgentCortex:
+		res = e.processCortex(file, info)
+	case parser.AgentHermes:
+		res = e.processHermes(file, info)
 	default:
 		res = processResult{
 			err: fmt.Errorf(
@@ -1816,6 +1898,121 @@ func (e *Engine) processKimi(
 	}
 }
 
+func (e *Engine) processKiro(
+	file parser.DiscoveredFile, info os.FileInfo,
+) processResult {
+	if e.shouldSkipByPath(file.Path, info) {
+		return processResult{skip: true}
+	}
+
+	sess, msgs, err := parser.ParseKiroSession(
+		file.Path, e.machine,
+	)
+	if err != nil {
+		return processResult{err: err}
+	}
+	if sess == nil {
+		return processResult{}
+	}
+
+	hash, err := ComputeFileHash(file.Path)
+	if err == nil {
+		sess.File.Hash = hash
+	}
+
+	return processResult{
+		results: []parser.ParseResult{
+			{Session: *sess, Messages: msgs},
+		},
+	}
+}
+
+func (e *Engine) processKiroIDE(
+	file parser.DiscoveredFile, info os.FileInfo,
+) processResult {
+	if e.shouldSkipByPath(file.Path, info) {
+		return processResult{skip: true}
+	}
+
+	sess, msgs, err := parser.ParseKiroIDESession(
+		file.Path, e.machine,
+	)
+	if err != nil {
+		return processResult{err: err}
+	}
+	if sess == nil {
+		return processResult{}
+	}
+
+	hash, err := ComputeFileHash(file.Path)
+	if err == nil {
+		sess.File.Hash = hash
+	}
+
+	return processResult{
+		results: []parser.ParseResult{
+			{Session: *sess, Messages: msgs},
+		},
+	}
+}
+
+func (e *Engine) processCortex(
+	file parser.DiscoveredFile, info os.FileInfo,
+) processResult {
+	if e.shouldSkipByPath(file.Path, info) {
+		return processResult{skip: true}
+	}
+
+	sess, msgs, err := parser.ParseCortexSession(
+		file.Path, e.machine,
+	)
+	if err != nil {
+		return processResult{err: err}
+	}
+	if sess == nil {
+		return processResult{}
+	}
+
+	hash, err := ComputeFileHash(file.Path)
+	if err == nil {
+		sess.File.Hash = hash
+	}
+
+	return processResult{
+		results: []parser.ParseResult{
+			{Session: *sess, Messages: msgs},
+		},
+	}
+}
+
+func (e *Engine) processHermes(
+	file parser.DiscoveredFile, info os.FileInfo,
+) processResult {
+	if e.shouldSkipByPath(file.Path, info) {
+		return processResult{skip: true}
+	}
+
+	sess, msgs, err := parser.ParseHermesSession(
+		file.Path, file.Project, e.machine,
+	)
+	if err != nil {
+		return processResult{err: err}
+	}
+	if sess == nil {
+		return processResult{}
+	}
+
+	hash, err := ComputeFileHash(file.Path)
+	if err == nil {
+		sess.File.Hash = hash
+	}
+
+	return processResult{
+		results: []parser.ParseResult{
+			{Session: *sess, Messages: msgs},
+		},
+	}
+}
 func (e *Engine) processCursor(
 	file parser.DiscoveredFile, info os.FileInfo,
 ) processResult {
@@ -2288,7 +2485,12 @@ func (e *Engine) SyncSingleSession(sessionID string) error {
 		return fmt.Errorf("unknown agent for session %s", sessionID)
 	}
 	if !def.FileBased {
-		return e.syncSingleOpenCode(sessionID)
+		switch def.Type {
+		case parser.AgentWarp:
+			return e.syncSingleWarp(sessionID)
+		default:
+			return e.syncSingleOpenCode(sessionID)
+		}
 	}
 
 	path := e.FindSourceFile(sessionID)
@@ -2323,12 +2525,22 @@ func (e *Engine) SyncSingleSession(sessionID string) error {
 			file.Project = filepath.Base(filepath.Dir(path))
 		}
 	case parser.AgentCursor:
-		// path is <cursorDir>/<project>/agent-transcripts/<uuid>.txt
-		// Extract project dir name from two levels up
-		projDir := filepath.Base(
-			filepath.Dir(filepath.Dir(path)),
-		)
-		file.Project = parser.DecodeCursorProjectDir(projDir)
+		// Support both flat and nested transcript layouts.
+		for _, cursorDir := range e.agentDirs[parser.AgentCursor] {
+			rel, ok := isUnder(cursorDir, path)
+			if !ok {
+				continue
+			}
+			projDir, ok := parser.ParseCursorTranscriptRelPath(rel)
+			if !ok {
+				continue
+			}
+			file.Project = parser.DecodeCursorProjectDir(projDir)
+			break
+		}
+		if file.Project == "" {
+			file.Project = "unknown"
+		}
 	case parser.AgentIflow:
 		// path is <iflowDir>/<project>/session-<uuid>.jsonl
 		// Extract project dir name from parent directory
@@ -2466,6 +2678,129 @@ func (e *Engine) syncSingleOpenCode(
 		)
 	}
 	return fmt.Errorf("opencode session %s not found", sessionID)
+}
+
+// syncWarp syncs sessions from Warp SQLite databases.
+// Uses per-conversation last_modified_at to detect changes,
+// so only modified conversations are fully parsed.
+func (e *Engine) syncWarp(
+	ctx context.Context,
+) []pendingWrite {
+	var allPending []pendingWrite
+	for _, dir := range e.agentDirs[parser.AgentWarp] {
+		if ctx.Err() != nil {
+			break
+		}
+		if dir == "" {
+			continue
+		}
+		allPending = append(
+			allPending, e.syncOneWarp(ctx, dir)...,
+		)
+	}
+	return allPending
+}
+
+// syncOneWarp handles a single Warp directory.
+func (e *Engine) syncOneWarp(
+	ctx context.Context, dir string,
+) []pendingWrite {
+	dbPath := parser.FindWarpDBPath(dir)
+	if dbPath == "" {
+		return nil
+	}
+
+	metas, err := parser.ListWarpSessionMeta(dbPath)
+	if err != nil {
+		log.Printf("sync warp: %v", err)
+		return nil
+	}
+	if len(metas) == 0 {
+		return nil
+	}
+
+	var changed []string
+	for _, m := range metas {
+		_, storedMtime, ok :=
+			e.db.GetFileInfoByPath(m.VirtualPath)
+		if ok && storedMtime == m.FileMtime {
+			continue
+		}
+		changed = append(changed, m.SessionID)
+	}
+	if len(changed) == 0 {
+		return nil
+	}
+
+	var pending []pendingWrite
+	for _, cid := range changed {
+		if ctx.Err() != nil {
+			break
+		}
+		sess, msgs, err := parser.ParseWarpSession(
+			dbPath, cid, e.machine,
+		)
+		if err != nil {
+			log.Printf(
+				"warp conversation %s: %v", cid, err,
+			)
+			continue
+		}
+		if sess == nil {
+			continue
+		}
+		pending = append(pending, pendingWrite{
+			sess: *sess,
+			msgs: msgs,
+		})
+	}
+
+	return pending
+}
+
+// syncSingleWarp re-syncs a single Warp conversation.
+func (e *Engine) syncSingleWarp(
+	sessionID string,
+) error {
+	rawID := strings.TrimPrefix(sessionID, "warp:")
+
+	var lastErr error
+	for _, dir := range e.agentDirs[parser.AgentWarp] {
+		if dir == "" {
+			continue
+		}
+		dbPath := parser.FindWarpDBPath(dir)
+		if dbPath == "" {
+			continue
+		}
+		sess, msgs, err := parser.ParseWarpSession(
+			dbPath, rawID, e.machine,
+		)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if sess == nil {
+			continue
+		}
+		if err := e.writeSessionFull(
+			pendingWrite{sess: *sess, msgs: msgs},
+		); err != nil && !errors.Is(err, db.ErrSessionExcluded) {
+			return fmt.Errorf("write session %s: %w",
+				sess.ID, err)
+		}
+		return nil
+	}
+
+	if len(e.agentDirs[parser.AgentWarp]) == 0 {
+		return fmt.Errorf("warp dir not configured")
+	}
+	if lastErr != nil {
+		return fmt.Errorf(
+			"warp session %s: %w", sessionID, lastErr,
+		)
+	}
+	return fmt.Errorf("warp session %s not found", sessionID)
 }
 
 func strPtr(s string) *string {

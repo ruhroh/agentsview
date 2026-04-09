@@ -1,5 +1,6 @@
 import * as api from "../api/client.js";
 import type { Message } from "../api/types.js";
+import { clearContentCaches } from "../utils/content-parser.js";
 import { computeMainModel } from "../utils/model.js";
 
 const MESSAGE_PAGE_SIZE = 1000;
@@ -121,6 +122,7 @@ class MessagesStore {
     this.abortController?.abort();
     this.abortController = null;
     this.messages = [];
+    clearContentCaches();
     this.sessionId = null;
     this.loading = false;
     this._stableMainModel = "";
@@ -437,6 +439,7 @@ class MessagesStore {
     signal: AbortSignal,
     messageCountHint?: number,
   ) {
+    clearContentCaches();
     this.loading = true;
     try {
       if (

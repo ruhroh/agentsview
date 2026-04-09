@@ -9,13 +9,14 @@
     type Opener,
   } from "../../api/client.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
-  import { agentColor } from "../../utils/agents.js";
+  import { agentColor, agentLabel } from "../../utils/agents.js";
   import { formatTokenUsage } from "../../utils/format.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import {
     supportsResume,
     buildResumeCommand,
+    formatResumeResponseCommand,
   } from "../../utils/resume.js";
 
   import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
@@ -195,7 +196,8 @@
       }
       // Launch failed — fall back to clipboard copy.
       if (resp.command) {
-        const ok = await copyToClipboard(resp.command);
+        const cmd = formatResumeResponseCommand(session.agent, resp);
+        const ok = cmd ? await copyToClipboard(cmd) : false;
         showFeedback(ok ? "Command copied!" : "Failed");
         return;
       }
@@ -217,7 +219,8 @@
     try {
       const resp = await resumeSession(session.id, { command_only: true });
       if (resp.command) {
-        const ok = await copyToClipboard(resp.command);
+        const cmd = formatResumeResponseCommand(session.agent, resp);
+        const ok = cmd ? await copyToClipboard(cmd) : false;
         showFeedback(ok ? "Command copied!" : "Failed");
         return;
       }
@@ -266,7 +269,8 @@
         return;
       }
       if (resp.command) {
-        const ok = await copyToClipboard(resp.command);
+        const cmd = formatResumeResponseCommand(session.agent, resp);
+        const ok = cmd ? await copyToClipboard(cmd) : false;
         showFeedback(ok ? "Command copied!" : "Failed");
         return;
       }
@@ -290,6 +294,12 @@
     openers.filter((o) => o.kind === "terminal"),
   );
 
+  const claudeDesktopOpener = $derived(
+    session?.agent === "claude"
+      ? openers.find((o) => o.id === "claude-desktop") ?? null
+      : null,
+  );
+
   const editorOpeners = $derived(
     openers.filter((o) => o.kind === "editor"),
   );
@@ -302,7 +312,7 @@
     canResume ||
     editorOpeners.length > 0 ||
     fileOpeners.length > 0 ||
-    sessionDir !== null,
+    (sessionDir !== null && !!session?.file_path),
   );
 
   function handleKeydown(e: KeyboardEvent) {
@@ -381,7 +391,7 @@
       <span
         class="agent-badge"
         style:background={agentColor(session.agent)}
-      >{session.agent}</span>
+      >{agentLabel(session.agent)}</span>
       {#if session.started_at}
         <span class="session-time">
           {new Date(session.started_at).toLocaleDateString(
@@ -484,6 +494,20 @@
                     <span class="open-menu-name">{opener.name}</span>
                   </button>
                 {/each}
+              {/if}
+              {#if canResume && claudeDesktopOpener}
+                <div class="open-menu-divider"></div>
+                <button
+                  class="open-menu-item"
+                  onclick={() => handleResumeIn(claudeDesktopOpener)}
+                >
+                  <span class="open-menu-num">
+                    <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
+                      <path d="M8 0a8 8 0 100 16A8 8 0 008 0zm3.5 8.9l-5 3a.75.75 0 01-1.125-.65v-6a.75.75 0 011.125-.65l5 3a.75.75 0 010 1.3z"/>
+                    </svg>
+                  </span>
+                  <span class="open-menu-name">Claude Desktop</span>
+                </button>
               {/if}
             </div>
           {/if}

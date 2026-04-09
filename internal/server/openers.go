@@ -73,10 +73,17 @@ var darwinOpenerCandidates = []openerCandidate{
 	{"xcode", "Xcode", "editor", []string{"xed"}, ""},
 	{"sublime", "Sublime Text", "editor", []string{"subl"}, ""},
 
+	// Claude Desktop — detected via app bundle. Uses claude:// URL
+	// scheme for session handoff rather than terminal launch.
+	{"claude-desktop", "Claude Desktop", "action", nil, "/Applications/Claude.app"},
+
 	// Terminals — Ghostty, iTerm2, kitty, and Terminal.app are macOS
 	// GUI apps; detect via app bundle first, fall back to PATH binary
 	// for non-default installs (e.g. Homebrew formula).
-	{"ghostty", "Ghostty", "terminal", []string{"ghostty"}, "/Applications/Ghostty.app"},
+	{"ghostty", "Ghostty", "terminal", []string{
+		"ghostty",
+		"/Applications/Ghostty.app/Contents/MacOS/ghostty",
+	}, ""},
 	{"iterm2", "iTerm2", "terminal", nil, "/Applications/iTerm.app"},
 	{"kitty", "kitty", "terminal", []string{"kitty"}, "/Applications/kitty.app"},
 	{"alacritty", "Alacritty", "terminal", []string{"alacritty"}, ""},

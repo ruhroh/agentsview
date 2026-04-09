@@ -4,7 +4,7 @@
   import { starred } from "../../stores/starred.svelte.js";
   import { shared } from "../../stores/shared.svelte.js";
   import { formatRelativeTime, truncate } from "../../utils/format.js";
-  import { agentColor as getAgentColor } from "../../utils/agents.js";
+  import { agentColor as getAgentColor, agentLabel } from "../../utils/agents.js";
 
   interface Props {
     session: Session;
@@ -358,7 +358,7 @@
   {#if !compact && (!hideAgent || showMachine)}
     <div class="side-meta">
       {#if !hideAgent}
-        <span class="agent-tag" style:color={agentColor}>{session.agent}</span>
+        <span class="agent-tag" style:color={agentColor}>{agentLabel(session.agent)}</span>
       {/if}
       {#if showMachine}
         <span class="machine-tag" title={session.machine}>

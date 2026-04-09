@@ -34,6 +34,9 @@ func (s *Server) handleGetSettings(
 	s.mu.RLock()
 	dirs := make(map[string][]string)
 	for _, def := range parser.Registry {
+		if !def.FileBased && def.EnvVar == "" {
+			continue
+		}
 		d := s.cfg.AgentDirs[def.Type]
 		if d == nil {
 			d = []string{}

@@ -31,6 +31,10 @@ export class LRUCache<K, V> {
     this.map.set(key, value);
   }
 
+  clear(): void {
+    this.map.clear();
+  }
+
   get size(): number {
     return this.map.size;
   }

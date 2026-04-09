@@ -3,6 +3,9 @@ package db
 import (
 	"context"
 	"fmt"
+	"strings"
+
+	"github.com/wesm/agentsview/internal/parser"
 )
 
 // Stats holds database-wide statistics.
@@ -20,18 +23,37 @@ const rootSessionFilter = `message_count > 0
 	AND relationship_type NOT IN ('subagent', 'fork')
 	AND deleted_at IS NULL`
 
+func nonFileAgentPlaceholders() string {
+	agents := parser.NonFileBackedAgents()
+	placeholders := make([]string, len(agents))
+	for i := range agents {
+		placeholders[i] = "?"
+	}
+	return strings.Join(placeholders, ", ")
+}
+
+func nonFileAgentArgs() []any {
+	agents := parser.NonFileBackedAgents()
+	args := make([]any, len(agents))
+	for i, a := range agents {
+		args[i] = string(a)
+	}
+	return args
+}
+
 // FileBackedSessionCount returns the number of root sessions
-// synced from files (excludes OpenCode, which is DB-backed).
-// Used by ResyncAll to decide whether empty file discovery
-// should abort the swap.
+// synced from files (excludes non-file-backed agents like
+// OpenCode and Claude.ai). Used by ResyncAll to decide
+// whether empty file discovery should abort the swap.
 func (db *DB) FileBackedSessionCount(
 	ctx context.Context,
 ) (int, error) {
 	var count int
 	err := db.getReader().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM sessions
-		 WHERE agent != 'opencode'
+		 WHERE agent NOT IN (`+nonFileAgentPlaceholders()+`)
 		 AND `+rootSessionFilter,
+		nonFileAgentArgs()...,
 	).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf(
@@ -44,11 +66,19 @@ func (db *DB) FileBackedSessionCount(
 // GetStats returns database statistics, counting only root
 // sessions with messages (matching the session list filter).
 func (db *DB) GetStats(
-	ctx context.Context, excludeOneShot bool,
+	ctx context.Context,
+	excludeOneShot, excludeAutomated bool,
 ) (Stats, error) {
 	filter := rootSessionFilter
 	if excludeOneShot {
-		filter += " AND user_message_count > 1"
+		if !excludeAutomated {
+			filter += " AND (user_message_count > 1 OR is_automated = 1)"
+		} else {
+			filter += " AND user_message_count > 1"
+		}
+	}
+	if excludeAutomated {
+		filter += " AND is_automated = 0"
 	}
 	query := fmt.Sprintf(`
 		SELECT

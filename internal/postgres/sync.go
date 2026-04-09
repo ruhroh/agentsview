@@ -30,11 +30,25 @@ type Sync struct {
 	machine string
 	schema  string
 
+	// Project filtering for push scope.
+	projects        []string
+	excludeProjects []string
+
 	closeOnce sync.Once
 	closeErr  error
 
 	schemaMu   sync.Mutex
 	schemaDone bool
+}
+
+// SyncOptions holds optional configuration for a Sync instance.
+type SyncOptions struct {
+	// Projects limits push scope to these project names.
+	// Mutually exclusive with ExcludeProjects.
+	Projects []string
+	// ExcludeProjects excludes these project names from push.
+	// Mutually exclusive with Projects.
+	ExcludeProjects []string
 }
 
 // New creates a Sync instance and verifies the PG connection.
@@ -45,6 +59,7 @@ type Sync struct {
 func New(
 	pgURL, schema string, local *db.DB,
 	machine string, allowInsecure bool,
+	opts SyncOptions,
 ) (*Sync, error) {
 	if pgURL == "" {
 		return nil, fmt.Errorf("postgres URL is required")
@@ -71,11 +86,19 @@ func New(
 	}
 
 	return &Sync{
-		pg:      pg,
-		local:   local,
-		machine: machine,
-		schema:  schema,
+		pg:              pg,
+		local:           local,
+		machine:         machine,
+		schema:          schema,
+		projects:        opts.Projects,
+		excludeProjects: opts.ExcludeProjects,
 	}, nil
+}
+
+// isFiltered reports whether push scope is restricted by
+// project include/exclude filters.
+func (s *Sync) isFiltered() bool {
+	return len(s.projects) > 0 || len(s.excludeProjects) > 0
 }
 
 // DB returns the underlying PostgreSQL connection pool.

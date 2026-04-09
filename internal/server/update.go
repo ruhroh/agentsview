@@ -24,6 +24,13 @@ type updateCheckResponse struct {
 func (s *Server) handleCheckUpdate(
 	w http.ResponseWriter, _ *http.Request,
 ) {
+	if s.cfg.DisableUpdateCheck {
+		writeJSON(w, http.StatusOK, updateCheckResponse{
+			CurrentVersion: s.version.Version,
+		})
+		return
+	}
+
 	checkFn := s.updateCheckFn
 	if checkFn == nil {
 		checkFn = update.CheckForUpdate

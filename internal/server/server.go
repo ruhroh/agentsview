@@ -248,6 +248,22 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /api/v1/sessions/{id}/pins", s.withTimeout(s.handleListSessionPins))
 	s.mux.Handle("POST /api/v1/sessions/{id}/messages/{messageId}/pin", s.withTimeout(s.handlePinMessage))
 	s.mux.Handle("DELETE /api/v1/sessions/{id}/messages/{messageId}/pin", s.withTimeout(s.handleUnpinMessage))
+	// Import: no timeout wrapper (large files may take longer).
+	s.mux.HandleFunc(
+		"POST /api/v1/import/claude-ai",
+		s.handleImportClaudeAI,
+	)
+	// ChatGPT import: no timeout wrapper.
+	s.mux.HandleFunc(
+		"POST /api/v1/import/chatgpt",
+		s.handleImportChatGPT,
+	)
+	// Assets: no timeout wrapper (static files).
+	s.mux.HandleFunc(
+		"GET /api/v1/assets/{filename}",
+		s.handleGetAsset,
+	)
+
 	// SPA fallback: serve embedded frontend
 	// Do not use timeout handler for static assets to avoid buffering.
 	s.mux.Handle("/", http.HandlerFunc(s.handleSPA))

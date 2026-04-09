@@ -1216,6 +1216,157 @@ func TestReplaceSessionMessages(t *testing.T) {
 	}
 }
 
+// TestReplaceSessionMessagesPreservesPins verifies that pinned
+// messages survive a full message replacement (regression test for
+// the ON DELETE CASCADE bug: deleting messages used to cascade-delete
+// pinned_messages rows).
+func TestReplaceSessionMessagesPreservesPins(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "s1", "p")
+	insertMessages(t, d,
+		userMsg("s1", 0, "msg0"),
+		asstMsg("s1", 1, "msg1"),
+		userMsg("s1", 2, "msg2"),
+	)
+
+	msgs, err := d.GetAllMessages(ctx, "s1")
+	if err != nil {
+		t.Fatalf("GetAllMessages: %v", err)
+	}
+
+	// Pin ordinal-0 with a note and ordinal-2 with no note.
+	note := "important"
+	if _, err := d.PinMessage("s1", msgs[0].ID, &note); err != nil {
+		t.Fatalf("PinMessage ord=0: %v", err)
+	}
+	if _, err := d.PinMessage("s1", msgs[2].ID, nil); err != nil {
+		t.Fatalf("PinMessage ord=2: %v", err)
+	}
+
+	// Record created_at before replace so we can verify it is preserved.
+	prePins, err := d.ListPinnedMessages(ctx, "s1")
+	if err != nil {
+		t.Fatalf("ListPinnedMessages before replace: %v", err)
+	}
+	pinCreatedAt := make(map[int]string) // ordinal → created_at
+	for _, p := range prePins {
+		pinCreatedAt[p.Ordinal] = p.CreatedAt
+	}
+
+	// Full replace (simulates a resync of an OpenCode or
+	// explicitly re-synced session).
+	if err := d.ReplaceSessionMessages("s1", []Message{
+		userMsg("s1", 0, "msg0-updated"),
+		asstMsg("s1", 1, "msg1-updated"),
+		userMsg("s1", 2, "msg2-updated"),
+	}); err != nil {
+		t.Fatalf("ReplaceSessionMessages: %v", err)
+	}
+
+	newMsgs, err := d.GetAllMessages(ctx, "s1")
+	if err != nil {
+		t.Fatalf("GetAllMessages after replace: %v", err)
+	}
+	if len(newMsgs) != 3 {
+		t.Fatalf("want 3 messages after replace, got %d", len(newMsgs))
+	}
+
+	pins, err := d.ListPinnedMessages(ctx, "s1")
+	if err != nil {
+		t.Fatalf("ListPinnedMessages: %v", err)
+	}
+	if len(pins) != 2 {
+		t.Fatalf("want 2 pins after replace, got %d", len(pins))
+	}
+
+	byOrdinal := make(map[int]PinnedMessage)
+	for _, p := range pins {
+		byOrdinal[p.Ordinal] = p
+	}
+
+	// Ordinal-0: note preserved, message_id updated, created_at preserved.
+	p0, ok := byOrdinal[0]
+	if !ok {
+		t.Fatal("pin for ordinal 0 missing after replace")
+	}
+	if p0.MessageID != newMsgs[0].ID {
+		t.Errorf("ord=0 pin message_id = %d, want %d",
+			p0.MessageID, newMsgs[0].ID)
+	}
+	if p0.Note == nil || *p0.Note != note {
+		t.Errorf("ord=0 pin note = %v, want %q", p0.Note, note)
+	}
+	if p0.CreatedAt != pinCreatedAt[0] {
+		t.Errorf("ord=0 pin created_at = %q, want %q",
+			p0.CreatedAt, pinCreatedAt[0])
+	}
+
+	// Ordinal-2: nil note preserved, message_id updated.
+	p2, ok := byOrdinal[2]
+	if !ok {
+		t.Fatal("pin for ordinal 2 missing after replace")
+	}
+	if p2.MessageID != newMsgs[2].ID {
+		t.Errorf("ord=2 pin message_id = %d, want %d",
+			p2.MessageID, newMsgs[2].ID)
+	}
+	if p2.Note != nil {
+		t.Errorf("ord=2 pin note = %v, want nil", p2.Note)
+	}
+	if p2.CreatedAt != pinCreatedAt[2] {
+		t.Errorf("ord=2 pin created_at = %q, want %q",
+			p2.CreatedAt, pinCreatedAt[2])
+	}
+}
+
+// TestReplaceSessionMessagesDropsPinsForRemovedOrdinals verifies that
+// pins whose ordinal no longer exists after a replace are silently
+// dropped (the underlying message was removed from the session).
+func TestReplaceSessionMessagesDropsPinsForRemovedOrdinals(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "s1", "p")
+	insertMessages(t, d,
+		userMsg("s1", 0, "msg0"),
+		asstMsg("s1", 1, "msg1"),
+	)
+
+	msgs, err := d.GetAllMessages(ctx, "s1")
+	if err != nil {
+		t.Fatalf("GetAllMessages: %v", err)
+	}
+	// Pin both messages.
+	for _, m := range msgs {
+		if _, err := d.PinMessage("s1", m.ID, nil); err != nil {
+			t.Fatalf("PinMessage: %v", err)
+		}
+	}
+
+	// Replace with only ordinal-0 (ordinal-1 is gone).
+	if err := d.ReplaceSessionMessages("s1", []Message{
+		userMsg("s1", 0, "msg0-updated"),
+	}); err != nil {
+		t.Fatalf("ReplaceSessionMessages: %v", err)
+	}
+
+	pins, err := d.ListPinnedMessages(ctx, "s1")
+	if err != nil {
+		t.Fatalf("ListPinnedMessages: %v", err)
+	}
+	if len(pins) != 1 {
+		t.Fatalf("want 1 pin (ordinal-1 dropped), got %d", len(pins))
+	}
+	if pins[0].Ordinal != 0 {
+		t.Errorf("surviving pin ordinal = %d, want 0", pins[0].Ordinal)
+	}
+	if pins[0].Note != nil {
+		t.Errorf("surviving pin note = %v, want nil", pins[0].Note)
+	}
+}
+
 func TestGetSessionFilePath(t *testing.T) {
 	d := testDB(t)
 
@@ -1397,7 +1548,7 @@ func TestCanceledContext(t *testing.T) {
 			return err
 		}, false},
 		{"GetStats", func() error {
-			_, err := d.GetStats(ctx, false)
+			_, err := d.GetStats(ctx, false, false)
 			return err
 		}, false},
 	}
@@ -1416,7 +1567,7 @@ func TestStats(t *testing.T) {
 	d := testDB(t)
 
 	// Empty DB returns nil EarliestSession
-	stats, err := d.GetStats(context.Background(), false)
+	stats, err := d.GetStats(context.Background(), false, false)
 	requireNoError(t, err, "GetStats empty")
 	if stats.EarliestSession != nil {
 		t.Errorf(
@@ -1440,7 +1591,7 @@ func TestStats(t *testing.T) {
 		userMsg("s2", 0, "bye"),
 	)
 
-	stats, err = d.GetStats(context.Background(), false)
+	stats, err = d.GetStats(context.Background(), false, false)
 	requireNoError(t, err, "GetStats")
 	if stats.SessionCount != 2 {
 		t.Errorf("session_count = %d, want 2", stats.SessionCount)
@@ -1473,7 +1624,7 @@ func TestStatsEarliestFallsBackToCreatedAt(t *testing.T) {
 	insertSession(t, d, "s-null-start", "proj")
 	insertMessages(t, d, userMsg("s-null-start", 0, "hi"))
 
-	stats, err := d.GetStats(context.Background(), false)
+	stats, err := d.GetStats(context.Background(), false, false)
 	requireNoError(t, err, "GetStats null started_at")
 	if stats.EarliestSession == nil {
 		t.Fatal(
@@ -1489,7 +1640,7 @@ func TestStatsEarliestFallsBackToCreatedAt(t *testing.T) {
 	})
 	insertMessages(t, d, userMsg("s-empty-start", 0, "hey"))
 
-	stats, err = d.GetStats(context.Background(), false)
+	stats, err = d.GetStats(context.Background(), false, false)
 	requireNoError(t, err, "GetStats empty started_at")
 	if stats.EarliestSession == nil {
 		t.Fatal(
@@ -1512,7 +1663,7 @@ func TestStatsEarliestFallsBackToCreatedAt(t *testing.T) {
 	})
 	insertMessages(t, d, userMsg("s-old", 0, "hello"))
 
-	stats, err = d.GetStats(context.Background(), false)
+	stats, err = d.GetStats(context.Background(), false, false)
 	requireNoError(t, err, "GetStats with old session")
 	if stats.EarliestSession == nil {
 		t.Fatal("earliest_session nil")
@@ -1534,7 +1685,7 @@ func TestGetProjects(t *testing.T) {
 	})
 	insertSession(t, d, "s3", "alpha")
 
-	projects, err := d.GetProjects(context.Background(), false)
+	projects, err := d.GetProjects(context.Background(), false, false)
 	requireNoError(t, err, "GetProjects")
 	if len(projects) != 2 {
 		t.Fatalf("got %d projects, want 2", len(projects))
@@ -1936,7 +2087,7 @@ func TestDeleteSessions(t *testing.T) {
 		insertMessages(t, d, userMsg(id, 0, "msg for "+id))
 	}
 
-	stats, _ := d.GetStats(context.Background(), false)
+	stats, _ := d.GetStats(context.Background(), false, false)
 	if stats.SessionCount != 3 {
 		t.Fatalf("initial sessions = %d, want 3", stats.SessionCount)
 	}
@@ -1963,7 +2114,7 @@ func TestDeleteSessions(t *testing.T) {
 		t.Errorf("s2 messages = %d, want 1", len(msgs))
 	}
 
-	stats, _ = d.GetStats(context.Background(), false)
+	stats, _ = d.GetStats(context.Background(), false, false)
 	if stats.SessionCount != 1 {
 		t.Errorf("session_count = %d, want 1", stats.SessionCount)
 	}
@@ -3895,7 +4046,7 @@ func TestGetAgentsExcludesEmptyAgent(t *testing.T) {
 	insertSession(t, d, "s3", "proj",
 		func(s *Session) { s.Agent = "" })
 
-	agents, err := d.GetAgents(context.Background(), false)
+	agents, err := d.GetAgents(context.Background(), false, false)
 	if err != nil {
 		t.Fatalf("GetAgents: %v", err)
 	}
@@ -3913,7 +4064,7 @@ func TestGetAgentsExcludesEmptyAgent(t *testing.T) {
 func TestGetAgentsEmptyResultSerializesAsArray(t *testing.T) {
 	d := testDB(t)
 
-	agents, err := d.GetAgents(context.Background(), false)
+	agents, err := d.GetAgents(context.Background(), false, false)
 	if err != nil {
 		t.Fatalf("GetAgents: %v", err)
 	}
@@ -4452,19 +4603,19 @@ func TestMetadataQueriesExcludeTrashed(t *testing.T) {
 	})
 
 	// Before trashing: both projects, agents, machines visible.
-	projects, err := d.GetProjects(ctx, false)
+	projects, err := d.GetProjects(ctx, false, false)
 	requireNoError(t, err, "GetProjects before trash")
 	if len(projects) != 2 {
 		t.Fatalf("projects before trash: got %d, want 2", len(projects))
 	}
 
-	agents, err := d.GetAgents(ctx, false)
+	agents, err := d.GetAgents(ctx, false, false)
 	requireNoError(t, err, "GetAgents before trash")
 	if len(agents) != 2 {
 		t.Fatalf("agents before trash: got %d, want 2", len(agents))
 	}
 
-	machines, err := d.GetMachines(ctx, false)
+	machines, err := d.GetMachines(ctx, false, false)
 	requireNoError(t, err, "GetMachines before trash")
 	if len(machines) != 2 {
 		t.Fatalf("machines before trash: got %d, want 2", len(machines))
@@ -4473,7 +4624,7 @@ func TestMetadataQueriesExcludeTrashed(t *testing.T) {
 	// Soft-delete s2: its project/agent/machine should disappear.
 	requireNoError(t, d.SoftDeleteSession("s2"), "soft delete s2")
 
-	projects, err = d.GetProjects(ctx, false)
+	projects, err = d.GetProjects(ctx, false, false)
 	requireNoError(t, err, "GetProjects after trash")
 	if len(projects) != 1 {
 		t.Errorf("projects after trash: got %d, want 1", len(projects))
@@ -4482,7 +4633,7 @@ func TestMetadataQueriesExcludeTrashed(t *testing.T) {
 		t.Errorf("project name: got %q, want %q", projects[0].Name, "proj-a")
 	}
 
-	agents, err = d.GetAgents(ctx, false)
+	agents, err = d.GetAgents(ctx, false, false)
 	requireNoError(t, err, "GetAgents after trash")
 	if len(agents) != 1 {
 		t.Errorf("agents after trash: got %d, want 1", len(agents))
@@ -4491,7 +4642,7 @@ func TestMetadataQueriesExcludeTrashed(t *testing.T) {
 		t.Errorf("agent name: got %q, want %q", agents[0].Name, "claude")
 	}
 
-	machines, err = d.GetMachines(ctx, false)
+	machines, err = d.GetMachines(ctx, false, false)
 	requireNoError(t, err, "GetMachines after trash")
 	if len(machines) != 1 {
 		t.Errorf("machines after trash: got %d, want 1", len(machines))
@@ -5270,7 +5421,7 @@ func TestListSessionsModifiedBetween(t *testing.T) {
 	}
 
 	// Query all.
-	all, err := d.ListSessionsModifiedBetween(ctx, "", "")
+	all, err := d.ListSessionsModifiedBetween(ctx, "", "", nil, nil)
 	if err != nil {
 		t.Fatalf("list all: %v", err)
 	}
@@ -5279,7 +5430,7 @@ func TestListSessionsModifiedBetween(t *testing.T) {
 	}
 
 	// Query with since.
-	since, err := d.ListSessionsModifiedBetween(ctx, "2026-03-11T00:00:00Z", "")
+	since, err := d.ListSessionsModifiedBetween(ctx, "2026-03-11T00:00:00Z", "", nil, nil)
 	if err != nil {
 		t.Fatalf("list since: %v", err)
 	}
@@ -5288,7 +5439,7 @@ func TestListSessionsModifiedBetween(t *testing.T) {
 	}
 
 	// Query with until.
-	until, err := d.ListSessionsModifiedBetween(ctx, "", "2026-03-11T12:00:00.000Z")
+	until, err := d.ListSessionsModifiedBetween(ctx, "", "2026-03-11T12:00:00.000Z", nil, nil)
 	if err != nil {
 		t.Fatalf("list until: %v", err)
 	}
@@ -5297,7 +5448,7 @@ func TestListSessionsModifiedBetween(t *testing.T) {
 	}
 
 	// Query with both.
-	between, err := d.ListSessionsModifiedBetween(ctx, "2026-03-10T12:00:00.000Z", "2026-03-11T12:00:00.000Z")
+	between, err := d.ListSessionsModifiedBetween(ctx, "2026-03-10T12:00:00.000Z", "2026-03-11T12:00:00.000Z", nil, nil)
 	if err != nil {
 		t.Fatalf("list between: %v", err)
 	}
@@ -5440,5 +5591,85 @@ func TestToolCallCountAndFingerprint(t *testing.T) {
 	}
 	if sum != 150 {
 		t.Errorf("sum = %d, want 150", sum)
+	}
+}
+
+func TestListSessionsModifiedBetween_ProjectFilter(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	sessions := []Session{
+		{ID: "s1", Project: "alpha", Machine: "local", Agent: "claude", CreatedAt: "2026-03-10T12:00:00.000Z"},
+		{ID: "s2", Project: "beta", Machine: "local", Agent: "claude", CreatedAt: "2026-03-10T12:00:00.000Z"},
+		{ID: "s3", Project: "gamma", Machine: "local", Agent: "claude", CreatedAt: "2026-03-10T12:00:00.000Z"},
+	}
+	for _, s := range sessions {
+		if err := d.UpsertSession(s); err != nil {
+			t.Fatalf("upsert %s: %v", s.ID, err)
+		}
+	}
+	for _, s := range sessions {
+		_, err := d.getWriter().Exec(
+			"UPDATE sessions SET created_at = ? WHERE id = ?",
+			s.CreatedAt, s.ID,
+		)
+		if err != nil {
+			t.Fatalf("backdate %s: %v", s.ID, err)
+		}
+	}
+
+	tests := []struct {
+		name            string
+		projects        []string
+		excludeProjects []string
+		wantIDs         []string
+	}{
+		{
+			name:    "no filter returns all",
+			wantIDs: []string{"s1", "s2", "s3"},
+		},
+		{
+			name:     "include alpha only",
+			projects: []string{"alpha"},
+			wantIDs:  []string{"s1"},
+		},
+		{
+			name:     "include alpha and gamma",
+			projects: []string{"alpha", "gamma"},
+			wantIDs:  []string{"s1", "s3"},
+		},
+		{
+			name:            "exclude beta",
+			excludeProjects: []string{"beta"},
+			wantIDs:         []string{"s1", "s3"},
+		},
+		{
+			name:     "include nonexistent project",
+			projects: []string{"nope"},
+			wantIDs:  []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := d.ListSessionsModifiedBetween(
+				ctx, "", "", tt.projects, tt.excludeProjects,
+			)
+			if err != nil {
+				t.Fatalf("ListSessionsModifiedBetween: %v", err)
+			}
+			var gotIDs []string
+			for _, s := range got {
+				gotIDs = append(gotIDs, s.ID)
+			}
+			if len(gotIDs) != len(tt.wantIDs) {
+				t.Fatalf("got %v, want %v", gotIDs, tt.wantIDs)
+			}
+			for i, id := range tt.wantIDs {
+				if gotIDs[i] != id {
+					t.Errorf("got[%d] = %q, want %q", i, gotIDs[i], id)
+				}
+			}
+		})
 	}
 }

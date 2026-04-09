@@ -23,6 +23,13 @@ const (
 	AgentPi            AgentType = "pi"
 	AgentOpenClaw      AgentType = "openclaw"
 	AgentKimi          AgentType = "kimi"
+	AgentClaudeAI      AgentType = "claude-ai"
+	AgentChatGPT       AgentType = "chatgpt"
+	AgentKiro          AgentType = "kiro"
+	AgentKiroIDE       AgentType = "kiro-ide"
+	AgentCortex        AgentType = "cortex"
+	AgentHermes        AgentType = "hermes"
+	AgentWarp          AgentType = "warp"
 )
 
 // AgentDef describes a supported coding agent's filesystem
@@ -207,6 +214,84 @@ var Registry = []AgentDef{
 		DiscoverFunc:   DiscoverKimiSessions,
 		FindSourceFunc: FindKimiSourceFile,
 	},
+	{
+		Type:        AgentClaudeAI,
+		DisplayName: "Claude.ai",
+		IDPrefix:    "claude-ai:",
+		FileBased:   false,
+	},
+	{
+		Type:        AgentChatGPT,
+		DisplayName: "ChatGPT",
+		IDPrefix:    "chatgpt:",
+		FileBased:   false,
+	},
+	{
+		Type:           AgentKiro,
+		DisplayName:    "Kiro",
+		EnvVar:         "KIRO_SESSIONS_DIR",
+		ConfigKey:      "kiro_dirs",
+		DefaultDirs:    []string{".kiro/sessions/cli"},
+		IDPrefix:       "kiro:",
+		FileBased:      true,
+		DiscoverFunc:   DiscoverKiroSessions,
+		FindSourceFunc: FindKiroSourceFile,
+	},
+	{
+		Type:           AgentKiroIDE,
+		DisplayName:    "Kiro IDE",
+		EnvVar:         "KIRO_IDE_DIR",
+		ConfigKey:      "kiro_ide_dirs",
+		DefaultDirs:    kiroIDEDefaultDirs(),
+		IDPrefix:       "kiro-ide:",
+		FileBased:      true,
+		DiscoverFunc:   DiscoverKiroIDESessions,
+		FindSourceFunc: FindKiroIDESourceFile,
+	},
+	{
+		Type:        AgentCortex,
+		DisplayName: "Cortex Code",
+		EnvVar:      "CORTEX_DIR",
+		ConfigKey:   "cortex_dirs",
+		DefaultDirs: []string{
+			".snowflake/cortex/conversations",
+		},
+		IDPrefix:       "cortex:",
+		FileBased:      true,
+		DiscoverFunc:   DiscoverCortexSessions,
+		FindSourceFunc: FindCortexSourceFile,
+	},
+	{
+		Type:           AgentHermes,
+		DisplayName:    "Hermes Agent",
+		EnvVar:         "HERMES_SESSIONS_DIR",
+		ConfigKey:      "hermes_sessions_dirs",
+		DefaultDirs:    []string{".hermes/sessions"},
+		IDPrefix:       "hermes:",
+		FileBased:      true,
+		DiscoverFunc:   DiscoverHermesSessions,
+		FindSourceFunc: FindHermesSourceFile,
+	},
+	{
+		Type:        AgentWarp,
+		DisplayName: "Warp",
+		EnvVar:      "WARP_DIR",
+		ConfigKey:   "warp_dirs",
+		DefaultDirs: warpDefaultDirs(),
+		IDPrefix:    "warp:",
+		FileBased:   false,
+	},
+}
+
+// NonFileBackedAgents returns agent types where FileBased is false.
+func NonFileBackedAgents() []AgentType {
+	var agents []AgentType
+	for _, def := range Registry {
+		if !def.FileBased {
+			agents = append(agents, def.Type)
+		}
+	}
+	return agents
 }
 
 // AgentByType returns the AgentDef for the given type.
@@ -276,6 +361,7 @@ type ParsedSession struct {
 	RelationshipType RelationshipType
 	Cwd              string
 	FirstMessage     string
+	DisplayName      string
 	StartedAt        time.Time
 	EndedAt          time.Time
 	MessageCount     int

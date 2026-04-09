@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/wesm/agentsview/internal/config"
 	"github.com/wesm/agentsview/internal/server"
 	"github.com/wesm/agentsview/internal/update"
 )
@@ -148,6 +149,43 @@ func TestCheckUpdateError(t *testing.T) {
 	if resp.UpdateAvailable {
 		t.Error(
 			"expected update_available=false on error",
+		)
+	}
+}
+
+func TestCheckUpdateDisabled(t *testing.T) {
+	t.Parallel()
+
+	te := setupWithServerOpts(t, []server.Option{
+		server.WithVersion(server.VersionInfo{
+			Version:   "v1.0.0",
+			Commit:    "abc123",
+			BuildDate: "2026-01-01",
+		}),
+		server.WithUpdateChecker(stubChecker(
+			&update.UpdateInfo{
+				CurrentVersion: "v1.0.0",
+				LatestVersion:  "v2.0.0",
+			},
+			nil,
+		)),
+	}, func(c *config.Config) {
+		c.DisableUpdateCheck = true
+	})
+
+	w := te.get(t, "/api/v1/update/check")
+	assertStatus(t, w, 200)
+
+	resp := decode[updateCheckResp](t, w)
+	if resp.UpdateAvailable {
+		t.Error(
+			"expected update_available=false when disabled",
+		)
+	}
+	if resp.CurrentVersion != "v1.0.0" {
+		t.Errorf(
+			"current_version = %q, want %q",
+			resp.CurrentVersion, "v1.0.0",
 		)
 	}
 }

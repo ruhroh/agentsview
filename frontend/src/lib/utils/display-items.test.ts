@@ -3,11 +3,13 @@ import { buildDisplayItems } from "./display-items.js";
 import { hasVisibleSegments } from "./content-parser.js";
 import type { Message } from "../api/types.js";
 
+let nextId = 1;
+
 function msg(
   overrides: Partial<Message> & { content: string },
 ): Message {
   return {
-    id: 1,
+    id: nextId++,
     session_id: "s1",
     ordinal: 0,
     role: "assistant",
