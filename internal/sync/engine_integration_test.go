@@ -3290,6 +3290,109 @@ func TestSyncAllCancelledDoesNotUpdateLastSync(t *testing.T) {
 	}
 }
 
+func TestSyncAllSince_FiltersByMtime(t *testing.T) {
+	env := setupTestEnv(t)
+
+	// Seed the DB with two sessions.
+	oldContent := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "old session").
+		String()
+	oldPath := env.writeClaudeSession(
+		t, "proj-old", "old-sess.jsonl", oldContent,
+	)
+
+	newContent := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "new session").
+		String()
+	newPath := env.writeClaudeSession(
+		t, "proj-new", "new-sess.jsonl", newContent,
+	)
+
+	// Backdate the old file to simulate an unchanged prior
+	// session; keep the new file at its natural mtime.
+	longAgo := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(oldPath, longAgo, longAgo); err != nil {
+		t.Fatalf("chtimes old: %v", err)
+	}
+
+	// SyncAllSince with a cutoff 1 hour ago should only
+	// process the new file.
+	cutoff := time.Now().Add(-1 * time.Hour)
+	stats := env.engine.SyncAllSince(
+		context.Background(), cutoff, nil,
+	)
+	if stats.Synced != 1 {
+		t.Errorf("synced = %d, want 1", stats.Synced)
+	}
+
+	// Verify only the new session is in the DB.
+	page, err := env.db.ListSessions(
+		context.Background(), db.SessionFilter{Limit: 10},
+	)
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	if len(page.Sessions) != 1 {
+		t.Fatalf("sessions = %d, want 1", len(page.Sessions))
+	}
+
+	// Second call with zero cutoff syncs everything.
+	stats = env.engine.SyncAllSince(
+		context.Background(), time.Time{}, nil,
+	)
+	// The new file is already in the DB (skip cache);
+	// the old file should now be synced too.
+	if stats.Synced == 0 {
+		t.Error("expected second sync to pick up backdated file")
+	}
+
+	page, err = env.db.ListSessions(
+		context.Background(), db.SessionFilter{Limit: 10},
+	)
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	if len(page.Sessions) != 2 {
+		t.Errorf("sessions = %d, want 2", len(page.Sessions))
+	}
+
+	_ = newPath
+}
+
+func TestSyncAll_PersistsStartedAndFinishedAt(t *testing.T) {
+	env := setupTestEnv(t)
+
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "hello").
+		String()
+	env.writeClaudeSession(
+		t, "proj", "sess.jsonl", content,
+	)
+
+	before := time.Now().UTC().Add(-1 * time.Second)
+	env.engine.SyncAll(context.Background(), nil)
+	after := time.Now().UTC().Add(1 * time.Second)
+
+	startedAt := env.engine.LastSyncStartedAt()
+	if startedAt.IsZero() {
+		t.Fatal("LastSyncStartedAt is zero after sync")
+	}
+	if startedAt.Before(before) || startedAt.After(after) {
+		t.Errorf("LastSyncStartedAt %v outside [%v, %v]",
+			startedAt, before, after)
+	}
+
+	finishedRaw, err := env.db.GetSyncState(
+		"last_sync_finished_at",
+	)
+	if err != nil {
+		t.Fatalf("get finish state: %v", err)
+	}
+	if finishedRaw == "" {
+		t.Fatal("last_sync_finished_at not persisted")
+	}
+}
+
 func TestSyncAllOpenCodeExcludedNotCountedAsFailed(
 	t *testing.T,
 ) {

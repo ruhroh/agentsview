@@ -684,7 +684,7 @@ func (e *Engine) ResyncAll(
 
 	// 3. Point engine at newDB and sync into it.
 	e.db = newDB
-	stats := e.syncAllLocked(ctx, onProgress)
+	stats := e.syncAllLocked(ctx, onProgress, time.Time{})
 	e.db = origDB // restore immediately
 
 	// Abort swap when the fresh DB would be worse than the
@@ -878,21 +878,60 @@ func removeWAL(path string) {
 	os.Remove(path + "-shm")
 }
 
+// Sync state keys persisted in pg_sync_state.
+const (
+	syncStateStartedAt  = "last_sync_started_at"
+	syncStateFinishedAt = "last_sync_finished_at"
+)
+
+// LastSyncStartedAt returns the recorded start time of the
+// most recent sync. Returns zero time if no sync has run.
+// Use this as the mtime cutoff for quick incremental syncs —
+// anything modified at or after this time must be re-evaluated.
+func (e *Engine) LastSyncStartedAt() time.Time {
+	raw, err := e.db.GetSyncState(syncStateStartedAt)
+	if err != nil || raw == "" {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
 // SyncAll discovers and syncs all session files from all agents.
 func (e *Engine) SyncAll(
 	ctx context.Context, onProgress ProgressFunc,
 ) SyncStats {
 	e.syncMu.Lock()
 	defer e.syncMu.Unlock()
-	return e.syncAllLocked(ctx, onProgress)
+	return e.syncAllLocked(ctx, onProgress, time.Time{})
+}
+
+// SyncAllSince syncs only files whose mtime is at or after
+// the given cutoff time. Use a zero time to sync everything
+// (equivalent to SyncAll). The cutoff is applied after
+// discovery; directory traversal still walks all session
+// directories. Typical callers pass a small safety margin
+// behind the last successful sync start to avoid missing
+// files that were being written during a prior sync.
+func (e *Engine) SyncAllSince(
+	ctx context.Context, since time.Time, onProgress ProgressFunc,
+) SyncStats {
+	e.syncMu.Lock()
+	defer e.syncMu.Unlock()
+	return e.syncAllLocked(ctx, onProgress, since)
 }
 
 func (e *Engine) syncAllLocked(
-	ctx context.Context, onProgress ProgressFunc,
+	ctx context.Context, onProgress ProgressFunc, since time.Time,
 ) SyncStats {
 	if ctx.Err() != nil {
 		return SyncStats{Aborted: true}
 	}
+
+	e.recordSyncStarted()
 
 	t0 := time.Now()
 
@@ -907,6 +946,10 @@ func (e *Engine) syncAllLocked(
 			counts[def.Type] += len(found)
 			all = append(all, found...)
 		}
+	}
+
+	if !since.IsZero() {
+		all = filterFilesByMtime(all, since)
 	}
 
 	verbose := onProgress == nil
@@ -1058,7 +1101,52 @@ func (e *Engine) syncAllLocked(
 	e.lastSync = time.Now()
 	e.lastSyncStats = stats
 	e.mu.Unlock()
+
+	e.recordSyncFinished()
 	return stats
+}
+
+// recordSyncStarted persists the start time of a sync run
+// into pg_sync_state. Callers use this to compute mtime
+// cutoffs for future quick incremental syncs.
+func (e *Engine) recordSyncStarted() {
+	ts := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := e.db.SetSyncState(syncStateStartedAt, ts); err != nil {
+		log.Printf("persist sync start time: %v", err)
+	}
+}
+
+// recordSyncFinished persists the finish time of a completed
+// sync run. Only called on successful completion (not on
+// cancellation or abort).
+func (e *Engine) recordSyncFinished() {
+	ts := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := e.db.SetSyncState(syncStateFinishedAt, ts); err != nil {
+		log.Printf("persist sync finish time: %v", err)
+	}
+}
+
+// filterFilesByMtime returns only files whose mtime is at or
+// after the given cutoff. Files that can't be stat'd are kept
+// (so errors surface in the worker rather than being silently
+// dropped). The cost is one stat per file — acceptable for
+// polling use cases where most files will be skipped.
+func filterFilesByMtime(
+	files []parser.DiscoveredFile, cutoff time.Time,
+) []parser.DiscoveredFile {
+	cutoffNs := cutoff.UnixNano()
+	out := files[:0]
+	for _, f := range files {
+		info, err := os.Stat(f.Path)
+		if err != nil {
+			out = append(out, f)
+			continue
+		}
+		if info.ModTime().UnixNano() >= cutoffNs {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // syncOpenCode syncs sessions from OpenCode SQLite databases.
