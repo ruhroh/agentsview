@@ -1867,8 +1867,6 @@ func (e *Engine) processCodex(
 		return processResult{skip: true}
 	}
 
-	// Try incremental parse for append-only JSONL files
-	// that have already been synced.
 	codexParseFn := func(
 		path string, offset int64, startOrd int,
 	) ([]parser.ParsedMessage, time.Time, int64, error) {

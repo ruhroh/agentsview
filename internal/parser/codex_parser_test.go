@@ -1294,3 +1294,212 @@ func TestParseCodexSessionFrom_NonSubagentFunctionOutputDoesNotRequireFullParse(
 	assert.Equal(t, 0, len(newMsgs))
 	assert.False(t, endedAt.IsZero())
 }
+
+func TestParseCodexSessionFrom_SeedsModelFromTurnContext(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	initial := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			"model-seed", "/tmp", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexTurnContextJSON(
+			"gpt-5.4", tsEarlyS1,
+		),
+		testjsonl.CodexMsgJSON("user", "hello", tsEarlyS5),
+		testjsonl.CodexMsgJSON(
+			"assistant", "hi there", tsLate,
+		),
+	)
+	path := createTestFile(t, "model-seed.jsonl", initial)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	offset := info.Size()
+
+	appended := testjsonl.JoinJSONL(
+		testjsonl.CodexMsgJSON(
+			"assistant", "second reply", tsLateS5,
+		),
+	)
+	f2, err := os.OpenFile(
+		path, os.O_APPEND|os.O_WRONLY, 0o644,
+	)
+	require.NoError(t, err)
+	_, err = f2.WriteString(appended)
+	require.NoError(t, err)
+	require.NoError(t, f2.Close())
+
+	newMsgs2, _, _, err := ParseCodexSessionFrom(
+		path, offset, 2, false,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, len(newMsgs2))
+	assert.Equal(t, "gpt-5.4", newMsgs2[0].Model,
+		"incremental parse should seed model from "+
+			"prior turn_context via file scan")
+}
+
+func TestParseCodexSessionFrom_SeedsBoundaryAfterTurnContext(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	// Offset lands immediately after a turn_context with no
+	// following message — the exact sync boundary edge case.
+	initial := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			"tc-boundary", "/tmp", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexTurnContextJSON(
+			"gpt-5.4", tsEarlyS1,
+		),
+	)
+	path := createTestFile(
+		t, "tc-boundary.jsonl", initial,
+	)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	offset := info.Size()
+
+	appended := testjsonl.JoinJSONL(
+		testjsonl.CodexMsgJSON("user", "hello", tsEarlyS5),
+		testjsonl.CodexMsgJSON(
+			"assistant", "world", tsLate,
+		),
+	)
+	f, err := os.OpenFile(
+		path, os.O_APPEND|os.O_WRONLY, 0o644,
+	)
+	require.NoError(t, err)
+	_, err = f.WriteString(appended)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	newMsgs, _, _, err := ParseCodexSessionFrom(
+		path, offset, 0, false,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 2, len(newMsgs))
+	assert.Equal(t, "gpt-5.4", newMsgs[0].Model,
+		"user message after turn_context boundary")
+	assert.Equal(t, "gpt-5.4", newMsgs[1].Model,
+		"assistant message after turn_context boundary")
+}
+
+func TestParseCodexSessionFrom_EmptyModelReset(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	// turn_context clears model to "" — incremental parse
+	// must honor the reset, not retain the old model.
+	initial := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			"model-reset", "/tmp", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexTurnContextJSON(
+			"gpt-5.4", tsEarlyS1,
+		),
+		testjsonl.CodexMsgJSON("user", "hello", tsEarlyS5),
+		testjsonl.CodexTurnContextJSON("", tsLate),
+	)
+	path := createTestFile(
+		t, "model-reset.jsonl", initial,
+	)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	offset := info.Size()
+
+	appended := testjsonl.JoinJSONL(
+		testjsonl.CodexMsgJSON(
+			"assistant", "after reset", tsLateS5,
+		),
+	)
+	f, err := os.OpenFile(
+		path, os.O_APPEND|os.O_WRONLY, 0o644,
+	)
+	require.NoError(t, err)
+	_, err = f.WriteString(appended)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	newMsgs, _, _, err := ParseCodexSessionFrom(
+		path, offset, 2, false,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, len(newMsgs))
+	assert.Equal(t, "", newMsgs[0].Model,
+		"empty-model turn_context should reset model")
+}
+
+func TestReadCodexModelAtOffset_SkipsInvalidJSON(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	// Truncated turn_context between a valid one and the
+	// offset — must not override the valid model.
+	validTC := testjsonl.CodexTurnContextJSON(
+		"gpt-5.4", tsEarlyS1,
+	)
+	truncated := `{"type":"turn_context","payload":{"model":"wrong`
+	content := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			"invalid-json", "/tmp",
+			"codex_cli_rs", tsEarly,
+		),
+	) + validTC + "\n" + truncated + "\n"
+
+	path := createTestFile(
+		t, "invalid-tc.jsonl", content,
+	)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	got := readCodexModelAtOffset(path, info.Size())
+	assert.Equal(t, "gpt-5.4", got,
+		"truncated turn_context should be skipped")
+}
+
+func TestReadCodexModelAtOffset(t *testing.T) {
+	t.Parallel()
+
+	content := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			"model-at-offset", "/tmp",
+			"codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexTurnContextJSON(
+			"gpt-5", tsEarlyS1,
+		),
+		testjsonl.CodexMsgJSON("user", "hello", tsEarlyS5),
+		testjsonl.CodexTurnContextJSON(
+			"gpt-5.4", tsLate,
+		),
+		testjsonl.CodexMsgJSON("user", "bye", tsLateS5),
+	)
+	path := createTestFile(
+		t, "model-at-offset.jsonl", content,
+	)
+
+	t.Run("full file returns last model", func(t *testing.T) {
+		info, err := os.Stat(path)
+		require.NoError(t, err)
+		got := readCodexModelAtOffset(path, info.Size())
+		assert.Equal(t, "gpt-5.4", got)
+	})
+
+	t.Run("zero offset returns empty", func(t *testing.T) {
+		got := readCodexModelAtOffset(path, 0)
+		assert.Equal(t, "", got)
+	})
+
+	t.Run("nonexistent file returns empty", func(t *testing.T) {
+		got := readCodexModelAtOffset("/no/such/file", 100)
+		assert.Equal(t, "", got)
+	})
+}
