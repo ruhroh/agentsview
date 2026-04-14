@@ -28,7 +28,6 @@ const READY_TIMEOUT: Duration = Duration::from_secs(30);
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(125);
 const LOGIN_SHELL_ENV_TIMEOUT: Duration = Duration::from_secs(3);
 
-
 type DynError = Box<dyn Error>;
 type CommandRx = Receiver<CommandEvent>;
 
@@ -68,9 +67,7 @@ pub fn run() {
             if let RunEvent::MenuEvent(event) = &event {
                 if event.id().0 == "about" {
                     if let Some(window) = app_handle.get_webview_window("main") {
-                        let _ = window.eval(
-                            "window.dispatchEvent(new CustomEvent('show-about'));",
-                        );
+                        let _ = window.eval("window.dispatchEvent(new CustomEvent('show-about'));");
                     }
                 }
                 if event.id().0 == "check_updates" {
@@ -120,9 +117,17 @@ fn spawn_sidecar(app: &App) -> Result<(CommandRx, CommandChild), DynError> {
         command = command.env(key, value);
     }
 
-    Ok(command
-        .args(["serve", "-host", HOST, "-port", port_arg.as_str()])
-        .spawn()?)
+    Ok(command.args(sidecar_args(port_arg.as_str())).spawn()?)
+}
+
+fn sidecar_args(port: &str) -> Vec<String> {
+    vec![
+        "serve".to_string(),
+        "--host".to_string(),
+        HOST.to_string(),
+        "--port".to_string(),
+        port.to_string(),
+    ]
 }
 
 fn init_navigation_guard_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
@@ -131,9 +136,7 @@ fn init_navigation_guard_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlug
             let backend_port = webview
                 .app_handle()
                 .try_state::<SidecarState>()
-                .and_then(|state| {
-                    state.backend_port.lock().ok().and_then(|g| *g)
-                });
+                .and_then(|state| state.backend_port.lock().ok().and_then(|g| *g));
             if is_allowed_navigation_url(url, backend_port) {
                 return true;
             }
@@ -174,9 +177,7 @@ fn is_allowed_navigation_url(url: &Url, backend_port: Option<u16>) -> bool {
     // localhost. Rejects all localhost URLs when the sidecar
     // port is not yet known.
     if let Some(port) = backend_port {
-        return url.scheme() == "http"
-            && url.host_str() == Some(HOST)
-            && url.port() == Some(port);
+        return url.scheme() == "http" && url.host_str() == Some(HOST) && url.port() == Some(port);
     }
     false
 }
@@ -471,9 +472,8 @@ fn forward_sidecar_logs(mut rx: CommandRx, window: WebviewWindow) {
     thread::spawn(move || {
         thread::sleep(READY_TIMEOUT);
         if !timeout_state.load(Ordering::SeqCst) {
-            let _ = timeout_window.eval(
-                "window.__setStatus('AgentsView backend did not become ready in time.');",
-            );
+            let _ = timeout_window
+                .eval("window.__setStatus('AgentsView backend did not become ready in time.');");
         }
     });
 
@@ -493,9 +493,8 @@ fn forward_sidecar_logs(mut rx: CommandRx, window: WebviewWindow) {
                         }
                         if let Some(status) = extract_startup_status(chunk.as_ref()) {
                             let escaped = status.replace('\\', "\\\\").replace('\'', "\\'");
-                            let _ = window.eval(
-                                format!("window.__setStatus('{escaped}');").as_str(),
-                            );
+                            let _ =
+                                window.eval(format!("window.__setStatus('{escaped}');").as_str());
                         }
                         if let Some(port) = parse_listening_port_from_stdout_buffer(
                             &mut stdout_buffer,
@@ -579,9 +578,7 @@ fn recover_webview(window: &WebviewWindow, port: u16) {
     match window.eval(health_js) {
         Ok(()) => {}
         Err(err) => {
-            eprintln!(
-                "[agentsview] WebView eval failed, recovering: {err}"
-            );
+            eprintln!("[agentsview] WebView eval failed, recovering: {err}");
             let url = desktop_redirect_url(port);
             if let Ok(parsed) = Url::parse(url.as_str()) {
                 let _ = window.navigate(parsed);
@@ -664,10 +661,9 @@ fn parse_listening_port_from_stdout_buffer(buffer: &mut String, chunk: &str) -> 
 }
 
 fn setup_menu(app: &mut App) -> Result<(), DynError> {
-    let about = MenuItemBuilder::with_id("about", "About AgentsView")
-        .build(app)?;
-    let check_updates = MenuItemBuilder::with_id("check_updates", "Check for Updates...")
-        .build(app)?;
+    let about = MenuItemBuilder::with_id("about", "About AgentsView").build(app)?;
+    let check_updates =
+        MenuItemBuilder::with_id("check_updates", "Check for Updates...").build(app)?;
 
     let mut builder = SubmenuBuilder::new(app, "File")
         .item(&about)
@@ -847,11 +843,7 @@ async fn check_for_updates(handle: &AppHandle, silent: bool) {
     }
 }
 
-async fn dialog_confirm(
-    handle: &AppHandle,
-    title: &str,
-    message: &str,
-) -> bool {
+async fn dialog_confirm(handle: &AppHandle, title: &str, message: &str) -> bool {
     let (tx, rx) = tokio::sync::oneshot::channel();
     let h = handle.clone();
     handle
@@ -950,6 +942,20 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     #[cfg(unix)]
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn sidecar_args_use_cobra_long_flags() {
+        assert_eq!(
+            sidecar_args("18080"),
+            vec![
+                "serve".to_string(),
+                "--host".to_string(),
+                HOST.to_string(),
+                "--port".to_string(),
+                "18080".to_string(),
+            ]
+        );
+    }
 
     #[test]
     fn parse_listening_port_extracts_backend_port() {

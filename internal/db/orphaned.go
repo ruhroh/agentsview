@@ -114,11 +114,12 @@ func (d *DB) CopyOrphanedDataFrom(
 	// new IDs (old IDs may collide with freshly synced
 	// messages). Probe is_system so older source DBs that
 	// lack the column don't abort the migration.
-	msgCols := "session_id, ordinal, role, content, " +
+	var msgCols strings.Builder
+	msgCols.WriteString("session_id, ordinal, role, content, " +
 		"timestamp, has_thinking, has_tool_use, " +
-		"content_length"
+		"content_length")
 	if oldDBHasColumn(ctx, tx, "messages", "is_system") {
-		msgCols += ", is_system"
+		msgCols.WriteString(", is_system")
 	}
 	for _, c := range []string{
 		"model", "token_usage", "context_tokens",
@@ -127,12 +128,12 @@ func (d *DB) CopyOrphanedDataFrom(
 		"claude_message_id", "claude_request_id",
 	} {
 		if oldDBHasColumn(ctx, tx, "messages", c) {
-			msgCols += ", " + c
+			msgCols.WriteString(", " + c)
 		}
 	}
 	if _, err := tx.ExecContext(ctx,
-		"INSERT INTO messages ("+msgCols+") "+
-			"SELECT "+msgCols+" FROM old_db.messages "+
+		"INSERT INTO messages ("+msgCols.String()+") "+
+			"SELECT "+msgCols.String()+" FROM old_db.messages "+
 			"WHERE session_id IN (SELECT id FROM _orphaned_ids)",
 	); err != nil {
 		return 0, fmt.Errorf(

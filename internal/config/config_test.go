@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/BurntSushi/toml"
+	"github.com/spf13/pflag"
 	"github.com/wesm/agentsview/internal/parser"
 )
 
@@ -57,6 +58,16 @@ func loadConfigFromFlags(t *testing.T, args ...string) (Config, error) {
 		return Config{}, err
 	}
 	return Load(fs)
+}
+
+func loadConfigFromPFlags(t *testing.T, args ...string) (Config, error) {
+	t.Helper()
+	fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
+	RegisterServePFlags(fs)
+	if err := fs.Parse(args); err != nil {
+		return Config{}, err
+	}
+	return LoadPFlags(fs)
 }
 
 func TestLoadEnv_OverridesDataDir(t *testing.T) {
@@ -108,6 +119,20 @@ func TestLoad_DefaultsWithoutFlags(t *testing.T) {
 	}
 	if len(cfg.PublicOrigins) != 0 {
 		t.Errorf("PublicOrigins = %v, want none", cfg.PublicOrigins)
+	}
+}
+
+func TestLoadPFlags_AppliesExplicitFlags(t *testing.T) {
+	cfg, err := loadConfigFromPFlags(t, "--host", "0.0.0.0", "--port", "9090")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if cfg.Host != "0.0.0.0" {
+		t.Errorf("Host = %q, want %q", cfg.Host, "0.0.0.0")
+	}
+	if cfg.Port != 9090 {
+		t.Errorf("Port = %d, want %d", cfg.Port, 9090)
 	}
 }
 

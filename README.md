@@ -76,14 +76,14 @@ session data. To disable:
 
 - **Desktop app**: set `AGENTSVIEW_DESKTOP_AUTOUPDATE=0`
 - **CLI/web UI**: set `AGENTSVIEW_DISABLE_UPDATE_CHECK=1`, pass
-  `-no-update-check`, or set `disable_update_check = true` in
+  `--no-update-check`, or set `disable_update_check = true` in
   `~/.agentsview/config.toml`
 
 ## Usage
 
 ```bash
 agentsview              # start server
-agentsview -port 9090   # custom port
+agentsview --port 9090   # custom port
 ```
 
 On startup, agentsview discovers sessions from all supported agents, syncs them
@@ -96,19 +96,19 @@ external browser origin you expect.
 
 ```bash
 # Direct HTTP on a custom hostname/port
-agentsview -host 0.0.0.0 -port 8004 \
-  -public-url http://viewer.example.test:8004
+agentsview --host 0.0.0.0 --port 8004 \
+  --public-url http://viewer.example.test:8004
 
 # HTTPS behind your own reverse proxy
-agentsview -host 127.0.0.1 -port 8004 \
-  -public-url https://viewer.example.test
+agentsview --host 127.0.0.1 --port 8004 \
+  --public-url https://viewer.example.test
 ```
 
 agentsview can also manage a Caddy frontend for you. In managed-Caddy mode, keep
 the backend on loopback and let Caddy terminate TLS and optionally restrict
 client IP ranges. By default, managed Caddy binds to `127.0.0.1` and exposes the
 public URL on port `8443`. To expose it on a non-loopback interface, set
-`-proxy-bind-host` explicitly and provide at least one `-allowed-subnet`.
+`--proxy-bind-host` explicitly and provide at least one `--allowed-subnet`.
 
 Managed Caddy mode requires the `caddy` CLI to already be installed. This patch
 does not automate Caddy installation. Use your normal OS package manager or ask
@@ -123,21 +123,21 @@ Linux, that typically means:
 sudo setcap cap_net_bind_service=+ep "$(command -v caddy)"
 ```
 
-Then run `agentsview` normally as your user with `-public-port 443` or
-`-public-port 80`. This avoids running the session viewer as root, which would
+Then run `agentsview` normally as your user with `--public-port 443` or
+`--public-port 80`. This avoids running the session viewer as root, which would
 otherwise change which home directory and agent session data it can see. If you
 do not need a privileged port, the default `8443` is the simpler option.
 
 ```bash
-agentsview -host 127.0.0.1 -port 8080 \
-  -public-url https://viewer.example.test \
-  -proxy caddy \
-  -proxy-bind-host 0.0.0.0 \
-  -public-port 8443 \
-  -tls-cert ~/.certs/viewer.crt \
-  -tls-key ~/.certs/viewer.key \
-  -allowed-subnet 10.0/16 \
-  -allowed-subnet 192.168.1.0/24
+agentsview --host 127.0.0.1 --port 8080 \
+  --public-url https://viewer.example.test \
+  --proxy caddy \
+  --proxy-bind-host 0.0.0.0 \
+  --public-port 8443 \
+  --tls-cert ~/.certs/viewer.crt \
+  --tls-key ~/.certs/viewer.key \
+  --allowed-subnet 10.0/16 \
+  --allowed-subnet 192.168.1.0/24
 ```
 
 You can persist the same settings in `~/.agentsview/config.toml`:
@@ -222,7 +222,7 @@ Serve the web UI directly from PostgreSQL with no local SQLite. Configure
 
 ```bash
 agentsview pg serve              # default: 127.0.0.1:8080
-agentsview pg serve -port 9090   # custom port
+agentsview pg serve --port 9090   # custom port
 ```
 
 To have `pg serve` manage a Caddy TLS frontend directly:
@@ -232,23 +232,23 @@ earlier for normal `serve` mode also apply here.
 
 ```bash
 agentsview pg serve \
-  -host 127.0.0.1 \
-  -port 18080 \
-  -public-url https://viewer.example.test \
-  -proxy caddy \
-  -proxy-bind-host 0.0.0.0 \
-  -public-port 8443 \
-  -tls-cert ~/.certs/viewer.crt \
-  -tls-key ~/.certs/viewer.key \
-  -allowed-subnet 10.0/16
+  --host 127.0.0.1 \
+  --port 18080 \
+  --public-url https://viewer.example.test \
+  --proxy caddy \
+  --proxy-bind-host 0.0.0.0 \
+  --public-port 8443 \
+  --tls-cert ~/.certs/viewer.crt \
+  --tls-key ~/.certs/viewer.key \
+  --allowed-subnet 10.0/16
 ```
 
 This mode is useful for shared team viewers where multiple machines push to a
 central PG database and one or more read-only instances serve the UI. Uploads,
 file watching, and local sync are disabled. For managed-Caddy mode, keep the
-backend `-host` on loopback and use `-proxy-bind-host` / `-public-port` to
-expose the public listener. If you run plain `pg serve` without `-proxy caddy`,
-then using a non-loopback `-host` enables token-authenticated remote access and
+backend `--host` on loopback and use `--proxy-bind-host` / `--public-port` to
+expose the public listener. If you run plain `pg serve` without `--proxy caddy`,
+then using a non-loopback `--host` enables token-authenticated remote access and
 prints the auth token on startup.
 
 The normal SQLite-backed `serve` mode and PostgreSQL-backed `pg serve` mode keep
@@ -260,7 +260,7 @@ separate managed-Caddy state, so both can coexist on one host.
   `agentsview prune`) are not propagated as deletions to PG. Sessions
   soft-deleted with `deleted_at` are synced correctly.
 - **Change detection**: Push uses aggregate length statistics rather than
-  content hashes. Use `-full` to force a complete re-push if content was
+  content hashes. Use `--full` to force a complete re-push if content was
   rewritten in-place.
 
 ## Documentation
