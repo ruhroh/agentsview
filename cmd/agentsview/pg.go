@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
-	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -13,52 +12,27 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/wesm/agentsview/internal/config"
 	"github.com/wesm/agentsview/internal/db"
 	"github.com/wesm/agentsview/internal/postgres"
 	"github.com/wesm/agentsview/internal/server"
 )
 
-func runPG(args []string) {
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr,
-			"usage: agentsview pg <push|status|serve>")
-		os.Exit(1)
-	}
-	switch args[0] {
-	case "push":
-		runPGPush(args[1:])
-	case "status":
-		runPGStatus(args[1:])
-	case "serve":
-		runPGServe(args[1:])
-	default:
-		fmt.Fprintf(os.Stderr,
-			"unknown pg command: %s\n", args[0])
-		os.Exit(1)
-	}
+type PGPushConfig struct {
+	Full            bool
+	ProjectsFlag    string
+	ExcludeProjects string
+	AllProjects     bool
 }
 
-func runPGPush(args []string) {
-	fs := flag.NewFlagSet("pg push", flag.ExitOnError)
-	full := fs.Bool("full", false,
-		"Force full local resync and PG push")
-	projectsFlag := fs.String("projects", "",
-		"Comma-separated list of projects to push (inclusive)")
-	excludeProjectsFlag := fs.String("exclude-projects", "",
-		"Comma-separated list of projects to exclude from push")
-	allProjects := fs.Bool("all-projects", false,
-		"Ignore configured project filters for this run")
-	if err := fs.Parse(args); err != nil {
-		log.Fatalf("parsing flags: %v", err)
-	}
-
-	if *projectsFlag != "" && *excludeProjectsFlag != "" {
+func runPGPush(cfg PGPushConfig) {
+	if cfg.ProjectsFlag != "" && cfg.ExcludeProjects != "" {
 		fatal("pg push: --projects and --exclude-projects " +
 			"are mutually exclusive")
 	}
-	if *allProjects &&
-		(*projectsFlag != "" || *excludeProjectsFlag != "") {
+	if cfg.AllProjects &&
+		(cfg.ProjectsFlag != "" || cfg.ExcludeProjects != "") {
 		fatal("pg push: --all-projects cannot be combined " +
 			"with --projects or --exclude-projects")
 	}
@@ -86,16 +60,16 @@ func runPGPush(args []string) {
 	// --all-projects clears both lists for an unfiltered push.
 	projects := pgCfg.Projects
 	excludeProjects := pgCfg.ExcludeProjects
-	if *allProjects {
+	if cfg.AllProjects {
 		projects = nil
 		excludeProjects = nil
 	}
-	if *projectsFlag != "" {
-		projects = splitProjectList(*projectsFlag)
+	if cfg.ProjectsFlag != "" {
+		projects = splitProjectList(cfg.ProjectsFlag)
 		excludeProjects = nil
 	}
-	if *excludeProjectsFlag != "" {
-		excludeProjects = splitProjectList(*excludeProjectsFlag)
+	if cfg.ExcludeProjects != "" {
+		excludeProjects = splitProjectList(cfg.ExcludeProjects)
 		projects = nil
 	}
 
@@ -124,8 +98,8 @@ func runPGPush(args []string) {
 	// are available for push. If a full resync was performed
 	// (e.g. due to data version change), force a full PG push
 	// since watermarks become stale after a local rebuild.
-	didResync := runLocalSync(appCfg, database, *full)
-	forceFull := *full || didResync
+	didResync := runLocalSync(appCfg, database, cfg.Full)
+	forceFull := cfg.Full || didResync
 
 	ps, err := postgres.New(
 		pgCfg.URL, pgCfg.Schema, database,
@@ -164,12 +138,7 @@ func runPGPush(args []string) {
 	}
 }
 
-func runPGStatus(args []string) {
-	fs := flag.NewFlagSet("pg status", flag.ExitOnError)
-	if err := fs.Parse(args); err != nil {
-		log.Fatalf("parsing flags: %v", err)
-	}
-
+func runPGStatus() {
 	appCfg, err := config.LoadMinimal()
 	if err != nil {
 		log.Fatalf("loading config: %v", err)
@@ -219,30 +188,22 @@ func runPGStatus(args []string) {
 	fmt.Printf("PG messages: %d\n", status.PGMessages)
 }
 
-func loadPGServeConfig(args []string) (config.Config, string, error) {
-	fs := flag.NewFlagSet("pg serve", flag.ContinueOnError)
-	basePath := fs.String("base-path", "",
-		"URL prefix for reverse-proxy subpath (e.g. /agentsview)")
-	config.RegisterServeFlags(fs)
-	if err := fs.Parse(args); err != nil {
-		return config.Config{}, "", fmt.Errorf("parsing flags: %w", err)
+func loadPGServeConfig(cmd *cobra.Command) (config.Config, string, error) {
+	basePath, err := cmd.Flags().GetString("base-path")
+	if err != nil {
+		return config.Config{}, "", fmt.Errorf("reading base-path: %w", err)
 	}
-
-	cfg, err := config.LoadPGServe(fs)
+	cfg, err := config.LoadPGServePFlags(cmd.Flags())
 	if err != nil {
 		return config.Config{}, "", fmt.Errorf("loading config: %w", err)
 	}
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
 		return config.Config{}, "", fmt.Errorf("creating data dir: %w", err)
 	}
-	return cfg, *basePath, nil
+	return cfg, basePath, nil
 }
 
-func runPGServe(args []string) {
-	appCfg, basePath, err := loadPGServeConfig(args)
-	if err != nil {
-		log.Fatalf("%v", err)
-	}
+func runPGServe(appCfg config.Config, basePath string) {
 	setupLogFile(appCfg.DataDir)
 	// Enable remote access with auth when binding to a
 	// non-loopback address; keep it off for localhost.

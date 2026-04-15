@@ -175,6 +175,12 @@ func ParseClaudeSession(
 		return nil, fmt.Errorf("reading %s: %w", path, err)
 	}
 
+	// Collapse consecutive assistant entries that share the same
+	// message.id — these are streaming progress snapshots of a
+	// single response. Keep only the last entry per message.id
+	// run (it has the final content and token counts).
+	entries = collapseStreamingDuplicates(entries)
+
 	fileInfo := FileInfo{
 		Path:  path,
 		Size:  info.Size(),
@@ -602,6 +608,42 @@ func parseDAG(
 	return results, nil
 }
 
+// collapseStreamingDuplicates removes consecutive assistant entries
+// that share the same message.id. Claude Code writes multiple JSONL
+// lines as a response streams — each has the same message.id but
+// progressively more output tokens. Only the last entry in each
+// same-message.id run has the final content and token counts.
+func collapseStreamingDuplicates(entries []dagEntry) []dagEntry {
+	if len(entries) <= 1 {
+		return entries
+	}
+
+	result := make([]dagEntry, 0, len(entries))
+	for i := 0; i < len(entries); i++ {
+		mid := ""
+		if entries[i].entryType == "assistant" {
+			mid = gjson.Get(entries[i].line, "message.id").Str
+		}
+
+		// Look ahead: if next entries are assistant with same
+		// message.id, skip to the last one in the run.
+		if mid != "" {
+			j := i + 1
+			for j < len(entries) &&
+				entries[j].entryType == "assistant" &&
+				gjson.Get(entries[j].line, "message.id").Str == mid {
+				j++
+			}
+			// Keep only the last entry (j-1) in the run.
+			result = append(result, entries[j-1])
+			i = j - 1
+		} else {
+			result = append(result, entries[i])
+		}
+	}
+	return result
+}
+
 // countUserTurns counts all user entries reachable from a
 // starting index by traversing the entire subtree. Earlier
 // versions followed only the first child at each node, which
@@ -704,11 +746,13 @@ func extractMessages(entries []dagEntry) (
 }
 
 // extractClaudeTokenFields populates Model, TokenUsage,
-// ContextTokens, and OutputTokens on a ParsedMessage from
-// a Claude JSONL line. Used by both full and incremental
-// parsing paths.
+// ContextTokens, OutputTokens, ClaudeMessageID, and
+// ClaudeRequestID on a ParsedMessage from a Claude JSONL line.
+// Used by both full and incremental parsing paths.
 func extractClaudeTokenFields(msg *ParsedMessage, line string) {
 	msg.Model = gjson.Get(line, "message.model").String()
+	msg.ClaudeMessageID = gjson.Get(line, "message.id").String()
+	msg.ClaudeRequestID = gjson.Get(line, "requestId").String()
 
 	usageResult := gjson.Get(line, "message.usage")
 	if usageResult.Exists() {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
-	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -14,6 +13,7 @@ import (
 	"time"
 	_ "time/tzdata"
 
+	"github.com/spf13/cobra"
 	"github.com/wesm/agentsview/internal/config"
 	"github.com/wesm/agentsview/internal/db"
 	"github.com/wesm/agentsview/internal/parser"
@@ -34,144 +34,9 @@ const (
 )
 
 func main() {
-	if len(os.Args) > 1 {
-		switch os.Args[1] {
-		case "prune":
-			runPrune(os.Args[2:])
-			return
-		case "update":
-			runUpdate(os.Args[2:])
-			return
-		case "serve":
-			runServe(os.Args[2:])
-			return
-		case "sync":
-			runSync(os.Args[2:])
-			return
-		case "pg":
-			runPG(os.Args[2:])
-			return
-		case "token-use":
-			runTokenUse(os.Args[2:])
-			return
-		case "import":
-			runImport(os.Args[2:])
-			return
-		case "projects":
-			runProjects(os.Args[2:])
-			return
-		case "version", "--version", "-v":
-			fmt.Printf("agentsview %s (commit %s, built %s)\n",
-				version, commit, buildDate)
-			return
-		case "help", "--help", "-h":
-			printUsage()
-			return
-		}
+	if err := executeCLI(); err != nil {
+		fatal("%v", err)
 	}
-
-	runServe(os.Args[1:])
-}
-
-func printUsage() {
-	fmt.Printf(`agentsview %s - local web viewer for AI agent sessions
-
-Syncs Claude Code, Codex, Copilot CLI, Gemini CLI, OpenCode, Cursor,
-and Amp session data into SQLite, serves an analytics dashboard and
-session browser via a local web UI.
-
-Usage:
-  agentsview [flags]          Start the server (default command)
-  agentsview serve [flags]    Start the server (explicit)
-  agentsview sync [flags]     Sync session data without serving
-  agentsview pg push [flags]  Push local data to PostgreSQL
-  agentsview pg status        Show PG sync status
-  agentsview pg serve [flags] Serve from PostgreSQL (read-only)
-  agentsview token-use <id>   Show token usage for a session (JSON)
-  agentsview prune [flags]    Delete sessions matching filters
-  agentsview import --type <type> <path>
-                          Import conversations (claude-ai, chatgpt)
-  agentsview projects [flags] List projects with session counts
-  agentsview update [flags]   Check for and install updates
-  agentsview version          Show version information
-  agentsview help             Show this help
-
-Server flags:
-  -host string        Host to bind to (default "127.0.0.1")
-  -port int           Port to listen on (default 8080)
-  -public-url str     Public URL to trust and open for hostname/proxy access
-  -public-origin str  Trusted browser origin to allow for remote/proxied access
-  -proxy string       Managed reverse proxy mode (currently: caddy)
-  -caddy-bin string   Caddy binary to use when -proxy=caddy
-  -proxy-bind-host    Local interface/IP for managed Caddy to bind
-  -public-port int    External port for managed Caddy/public URL (default 8443)
-  -tls-cert string    TLS certificate path for managed Caddy HTTPS mode
-  -tls-key string     TLS key path for managed Caddy HTTPS mode
-  -allowed-subnet str Client CIDR allowed to connect to the managed proxy
-  -no-browser         Don't open browser on startup
-
-Sync flags:
-  -full              Force a full resync regardless of data version
-
-PG push flags:
-  -full              Bypass per-message skip heuristic
-  -projects string   Comma-separated projects to push (inclusive)
-  -exclude-projects string  Comma-separated projects to exclude from push
-  -all-projects      Ignore configured project filters for this run
-
-PG serve flags:
-  -host string       Host to bind to (default "127.0.0.1")
-  -port int          Port to listen on (default 8080)
-
-Prune flags:
-  -project string     Sessions whose project contains this substring
-  -max-messages int   Sessions with at most N messages (default -1)
-  -before string      Sessions that ended before this date (YYYY-MM-DD)
-  -first-message str  Sessions whose first message starts with this text
-  -dry-run            Show what would be pruned without deleting
-  -yes                Skip confirmation prompt
-
-Projects flags:
-  -json              Output as JSON array
-
-Update flags:
-  -check              Check for updates without installing
-  -yes                Install without confirmation prompt
-  -force              Force check (ignore cache)
-
-Environment variables:
-  CLAUDE_PROJECTS_DIR     Claude Code projects directory
-  CODEX_SESSIONS_DIR      Codex sessions directory
-  COPILOT_DIR             Copilot CLI directory
-  GEMINI_DIR              Gemini CLI directory
-  OPENCODE_DIR            OpenCode data directory
-  CURSOR_PROJECTS_DIR     Cursor projects directory
-  IFLOW_DIR               iFlow projects directory
-  AMP_DIR                 Amp threads directory
-  AGENT_VIEWER_DATA_DIR   Data directory (database, config)
-  AGENTSVIEW_PG_URL       PostgreSQL connection URL for sync
-  AGENTSVIEW_PG_MACHINE   Machine name for PG sync
-  AGENTSVIEW_PG_SCHEMA    PG schema name (default "agentsview")
-  AGENTSVIEW_SHARE_URL    Share server base URL
-  AGENTSVIEW_SHARE_TOKEN  Share server bearer token
-  AGENTSVIEW_SHARE_PUBLISHER
-                          Publisher/machine name used for shared sessions
-
-Watcher excludes:
-  Add "watch_exclude_patterns" to ~/.agentsview/config.toml to skip
-  directory names/patterns while recursively watching roots.
-  Example:
-  watch_exclude_patterns = [".git", "node_modules", ".next", "dist"]
-
-Multiple directories:
-  Add arrays to ~/.agentsview/config.toml to scan multiple locations:
-  claude_project_dirs = ["/path/one", "/path/two"]
-  codex_sessions_dirs = ["/codex/a", "/codex/b"]
-  When set, these override the default directory. Environment variables
-  override config file arrays.
-
-Data is stored in ~/.agentsview/ by default.
-`, version)
 }
 
 // warnMissingDirs prints a warning to stderr for each
@@ -197,9 +62,8 @@ func warnMissingDirs(dirs []string, label string) {
 	}
 }
 
-func runServe(args []string) {
+func runServe(cfg config.Config) {
 	start := time.Now()
-	cfg := mustLoadConfig(args)
 	if err := ensureShareConfigOnStartup(&cfg); err != nil {
 		fatal("configuring share settings: %v", err)
 	}
@@ -261,6 +125,14 @@ func runServe(args []string) {
 			go startUnwatchedPoll(engine)
 		}
 	}
+
+	// Seed model_pricing after any resync swap so the new DB
+	// file (which doesn't carry pricing across the swap) is
+	// populated before the dashboard starts answering
+	// requests. Synchronous fallback upsert so the first
+	// usage page load does not observe an empty table;
+	// background LiteLLM refresh follows immediately.
+	seedPricing(database)
 
 	// Auto-bind to 0.0.0.0 when remote access is enabled so the
 	// server is reachable from the network. Only override if the
@@ -346,23 +218,11 @@ func runServe(args []string) {
 	}
 }
 
-func mustLoadConfig(args []string) config.Config {
-	fs := flag.NewFlagSet("agentsview", flag.ExitOnError)
-	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(),
-			"Usage: agentsview [serve] [flags]\n\nFlags:\n")
-		fs.PrintDefaults()
-	}
-	config.RegisterServeFlags(fs)
-	if err := fs.Parse(args); err != nil {
-		log.Fatalf("parsing flags: %v", err)
-	}
-
-	cfg, err := config.Load(fs)
+func mustLoadConfig(cmd *cobra.Command) config.Config {
+	cfg, err := config.LoadPFlags(cmd.Flags())
 	if err != nil {
 		log.Fatalf("loading config: %v", err)
 	}
-
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
 		log.Fatalf("creating data dir: %v", err)
 	}
@@ -514,8 +374,9 @@ func startFileWatcher(
 	}
 
 	type watchRoot struct {
-		dir  string
-		root string // actual path passed to WatchRecursive
+		dir     string
+		root    string // actual path passed to WatchRecursive
+		shallow bool   // use shallow watch (root only)
 	}
 
 	var roots []watchRoot
@@ -527,7 +388,7 @@ func startFileWatcher(
 			if len(def.WatchSubdirs) == 0 {
 				if _, err := os.Stat(d); err == nil {
 					roots = append(
-						roots, watchRoot{d, d},
+						roots, watchRoot{d, d, def.ShallowWatch},
 					)
 				}
 				continue
@@ -536,7 +397,7 @@ func startFileWatcher(
 				watchDir := filepath.Join(d, sub)
 				if _, err := os.Stat(watchDir); err == nil {
 					roots = append(
-						roots, watchRoot{d, watchDir},
+						roots, watchRoot{d, watchDir, def.ShallowWatch},
 					)
 				}
 			}
@@ -544,7 +405,17 @@ func startFileWatcher(
 	}
 
 	var totalWatched int
+	var shallowWatched int
 	for _, r := range roots {
+		if r.shallow {
+			if watcher.WatchShallow(r.root) {
+				shallowWatched++
+				totalWatched++
+			} else {
+				unwatchedDirs = append(unwatchedDirs, r.dir)
+			}
+			continue
+		}
 		watched, uw, _ := watcher.WatchRecursive(r.root)
 		totalWatched += watched
 		if uw > 0 {
@@ -556,10 +427,17 @@ func startFileWatcher(
 		}
 	}
 
-	fmt.Printf(
-		"Watching %d directories for changes (%s)\n",
-		totalWatched, time.Since(t).Round(time.Millisecond),
-	)
+	if shallowWatched > 0 {
+		fmt.Printf(
+			"Watching %d directories for changes (%d shallow) (%s)\n",
+			totalWatched, shallowWatched, time.Since(t).Round(time.Millisecond),
+		)
+	} else {
+		fmt.Printf(
+			"Watching %d directories for changes (%s)\n",
+			totalWatched, time.Since(t).Round(time.Millisecond),
+		)
+	}
 	watcher.Start()
 	return watcher.Stop, unwatchedDirs
 }

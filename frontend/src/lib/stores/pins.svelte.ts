@@ -16,18 +16,27 @@ class PinsStore {
   #loadAllVersion = 0;
   /** Incremented on every mutation so loads can detect staleness. */
   #mutationVersion = 0;
+  /** Project that the current this.pins was fetched for. */
+  #loadedProject: string | undefined = undefined;
 
-  async loadAll() {
+  async loadAll(project?: string) {
+    // Clear immediately when switching projects to prevent stale
+    // pins from the previous filter remaining visible while the
+    // new request is in-flight or if it fails.
+    if (project !== this.#loadedProject) {
+      this.pins = [];
+    }
     this.loading = true;
     const loadVer = ++this.#loadAllVersion;
     const mutVer = this.#mutationVersion;
     try {
-      const res = await api.listPins();
+      const res = await api.listPins(project);
       // Apply only if this is the latest load AND no mutation
       // occurred since the request started (which would make
       // this response stale relative to the optimistic state).
       if (this.#loadAllVersion === loadVer && this.#mutationVersion === mutVer) {
         this.pins = res.pins;
+        this.#loadedProject = project;
       }
     } catch {
       // Silently ignore — pins are non-critical.
@@ -148,4 +157,8 @@ class PinsStore {
   }
 }
 
-export const pins = new PinsStore();
+export function createPinsStore(): PinsStore {
+  return new PinsStore();
+}
+
+export const pins = createPinsStore();

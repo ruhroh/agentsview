@@ -16,6 +16,7 @@
   import UpdateModal from "./lib/components/modals/UpdateModal.svelte";
   import ConfirmDeleteModal from "./lib/components/modals/ConfirmDeleteModal.svelte";
   import AnalyticsPage from "./lib/components/analytics/AnalyticsPage.svelte";
+  import UsagePage from "./lib/components/usage/UsagePage.svelte";
   import InsightsPage from "./lib/components/insights/InsightsPage.svelte";
   import PinnedPage from "./lib/components/pinned/PinnedPage.svelte";
   import TrashPage from "./lib/components/trash/TrashPage.svelte";
@@ -28,7 +29,8 @@
   import { starred } from "./lib/stores/starred.svelte.js";
   import { pins } from "./lib/stores/pins.svelte.js";
   import { settings } from "./lib/stores/settings.svelte.js";
-  import { setAuthToken, getAuthToken, setServerUrl } from "./lib/api/client.js";
+  import { setAuthToken, getAuthToken, setServerUrl, getBase } from "./lib/api/client.js";
+  import { setupVisibilityHealthCheck } from "./lib/utils/health.js";
   import { registerShortcuts } from "./lib/utils/keyboard.js";
   import { shouldAutoSwitchTranscriptModeToNormal } from "./lib/utils/transcript-mode.js";
 
@@ -312,9 +314,12 @@
     sync.checkForUpdate();
     sync.startPolling();
 
+    const healthCleanup = setupVisibilityHealthCheck(getBase);
+
     window.addEventListener("show-about", showAbout);
     const cleanup = registerShortcuts({ navigateMessage });
     return () => {
+      healthCleanup();
       cleanup();
       window.removeEventListener("show-about", showAbout);
       sync.stopPolling();
@@ -365,7 +370,11 @@
 
 <AppHeader />
 
-{#if router.route === "insights"}
+{#if router.route === "usage"}
+  <div class="page-scroll">
+    <UsagePage />
+  </div>
+{:else if router.route === "insights"}
   <div class="page-scroll">
     <InsightsPage />
   </div>

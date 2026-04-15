@@ -5,57 +5,26 @@ package main
 import (
 	"context"
 	"encoding/base64"
-	"errors"
-	"flag"
 	"fmt"
 	"log"
 	"os"
-	"strings"
 
 	"github.com/wesm/agentsview/internal/config"
 	"github.com/wesm/agentsview/internal/db"
 	"github.com/wesm/agentsview/internal/parser"
+	"github.com/wesm/agentsview/internal/ssh"
 	"github.com/wesm/agentsview/internal/sync"
 )
 
 // SyncConfig holds parsed CLI options for the sync command.
 type SyncConfig struct {
 	Full bool
+	Host string
+	User string
+	Port int
 }
 
-func parseSyncFlags(args []string) (SyncConfig, error) {
-	fs := flag.NewFlagSet("sync", flag.ContinueOnError)
-	full := fs.Bool(
-		"full", false,
-		"Force a full resync regardless of data version",
-	)
-
-	if err := fs.Parse(args); err != nil {
-		return SyncConfig{}, err
-	}
-
-	if fs.NArg() > 0 {
-		return SyncConfig{}, fmt.Errorf(
-			"unexpected arguments: %s",
-			strings.Join(fs.Args(), " "),
-		)
-	}
-
-	return SyncConfig{
-		Full: *full,
-	}, nil
-}
-
-func runSync(args []string) {
-	cfg, err := parseSyncFlags(args)
-	if err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			os.Exit(0)
-		}
-		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(1)
-	}
-
+func runSync(cfg SyncConfig) {
 	appCfg, err := config.LoadMinimal()
 	if err != nil {
 		log.Fatalf("loading config: %v", err)
@@ -74,14 +43,38 @@ func runSync(args []string) {
 	defer database.Close()
 
 	if appCfg.CursorSecret != "" {
-		secret, decErr := base64.StdEncoding.DecodeString(appCfg.CursorSecret)
+		secret, decErr := base64.StdEncoding.DecodeString(
+			appCfg.CursorSecret,
+		)
 		if decErr != nil {
 			fatal("invalid cursor secret: %v", decErr)
 		}
 		database.SetCursorSecret(secret)
 	}
 
+	if cfg.Host != "" {
+		runRemoteSync(appCfg, database, cfg)
+		return
+	}
+
 	runLocalSync(appCfg, database, cfg.Full)
+}
+
+func runRemoteSync(
+	appCfg config.Config, database *db.DB, cfg SyncConfig,
+) {
+	rs := &ssh.RemoteSync{
+		Host:                    cfg.Host,
+		User:                    cfg.User,
+		Port:                    cfg.Port,
+		Full:                    cfg.Full,
+		DB:                      database,
+		BlockedResultCategories: appCfg.ResultContentBlockedCategories,
+	}
+	ctx := context.Background()
+	if _, err := rs.Run(ctx); err != nil {
+		fatal("remote sync: %v", err)
+	}
 }
 
 // runLocalSync runs a local sync (incremental or full resync).
@@ -117,7 +110,9 @@ func runLocalSync(
 	}
 
 	fmt.Println()
-	stats, err := database.GetStats(context.Background(), false, false)
+	stats, err := database.GetStats(
+		context.Background(), false, false,
+	)
 	if err == nil {
 		fmt.Printf(
 			"Database: %d sessions, %d messages\n",

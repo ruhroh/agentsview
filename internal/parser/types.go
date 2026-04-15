@@ -15,6 +15,7 @@ const (
 	AgentCopilot       AgentType = "copilot"
 	AgentGemini        AgentType = "gemini"
 	AgentOpenCode      AgentType = "opencode"
+	AgentOpenHands     AgentType = "openhands"
 	AgentCursor        AgentType = "cursor"
 	AgentIflow         AgentType = "iflow"
 	AgentAmp           AgentType = "amp"
@@ -30,6 +31,7 @@ const (
 	AgentCortex        AgentType = "cortex"
 	AgentHermes        AgentType = "hermes"
 	AgentWarp          AgentType = "warp"
+	AgentPositron      AgentType = "positron"
 )
 
 // AgentDef describes a supported coding agent's filesystem
@@ -42,6 +44,7 @@ type AgentDef struct {
 	DefaultDirs  []string // paths relative to $HOME
 	IDPrefix     string   // session ID prefix ("" for Claude)
 	WatchSubdirs []string // subdirs to watch (nil = watch root)
+	ShallowWatch bool     // true = watch root only, rely on periodic sync for subdirs
 	FileBased    bool     // false for DB-backed agents
 
 	// DiscoverFunc finds session files under a root directory.
@@ -113,9 +116,22 @@ var Registry = []AgentDef{
 		FileBased:   false,
 	},
 	{
+		Type:           AgentOpenHands,
+		DisplayName:    "OpenHands CLI",
+		EnvVar:         "OPENHANDS_CONVERSATIONS_DIR",
+		ConfigKey:      "openhands_dirs",
+		DefaultDirs:    []string{".openhands/conversations"},
+		IDPrefix:       "openhands:",
+		FileBased:      true,
+		ShallowWatch:   true,
+		DiscoverFunc:   DiscoverOpenHandsSessions,
+		FindSourceFunc: FindOpenHandsSourceFile,
+	},
+	{
 		Type:           AgentCursor,
 		DisplayName:    "Cursor",
 		EnvVar:         "CURSOR_PROJECTS_DIR",
+		ConfigKey:      "cursor_project_dirs",
 		DefaultDirs:    []string{".cursor/projects"},
 		IDPrefix:       "cursor:",
 		FileBased:      true,
@@ -126,6 +142,7 @@ var Registry = []AgentDef{
 		Type:           AgentAmp,
 		DisplayName:    "Amp",
 		EnvVar:         "AMP_DIR",
+		ConfigKey:      "amp_dirs",
 		DefaultDirs:    []string{".local/share/amp/threads"},
 		IDPrefix:       "amp:",
 		FileBased:      true,
@@ -186,6 +203,7 @@ var Registry = []AgentDef{
 		Type:           AgentPi,
 		DisplayName:    "Pi",
 		EnvVar:         "PI_DIR",
+		ConfigKey:      "pi_dirs",
 		DefaultDirs:    []string{".pi/agent/sessions"},
 		IDPrefix:       "pi:",
 		FileBased:      true,
@@ -281,6 +299,20 @@ var Registry = []AgentDef{
 		IDPrefix:    "warp:",
 		FileBased:   false,
 	},
+	{
+		Type:        AgentPositron,
+		DisplayName: "Positron Assistant",
+		EnvVar:      "POSITRON_DIR",
+		ConfigKey:   "positron_dirs",
+		DefaultDirs: []string{
+			"Library/Application Support/Positron/User",
+		},
+		IDPrefix:       "positron:",
+		WatchSubdirs:   []string{"workspaceStorage"},
+		FileBased:      true,
+		DiscoverFunc:   DiscoverPositronSessions,
+		FindSourceFunc: FindPositronSourceFile,
+	},
 }
 
 // NonFileBackedAgents returns agent types where FileBased is false.
@@ -304,20 +336,35 @@ func AgentByType(t AgentType) (AgentDef, bool) {
 	return AgentDef{}, false
 }
 
+// StripHostPrefix splits a remote session ID into its host
+// and raw ID parts. Remote IDs use the form "host~rawID"
+// where the "~" separator avoids conflict with both agent
+// prefixes (":") and URL path segments ("/"). For local
+// session IDs (no "~" present), host is empty and rawID is
+// the original ID.
+func StripHostPrefix(id string) (host, rawID string) {
+	if before, after, ok := strings.Cut(id, "~"); ok {
+		return before, after
+	}
+	return "", id
+}
+
 // AgentByPrefix returns the AgentDef whose IDPrefix matches
 // the session ID. For Claude (empty prefix), the match
 // succeeds only when no other prefix matches and the ID
-// does not contain a colon.
+// does not contain a colon. Host prefixes ("host~...") are
+// stripped before matching.
 func AgentByPrefix(sessionID string) (AgentDef, bool) {
+	_, rawID := StripHostPrefix(sessionID)
 	for _, def := range Registry {
 		if def.IDPrefix != "" &&
-			strings.HasPrefix(sessionID, def.IDPrefix) {
+			strings.HasPrefix(rawID, def.IDPrefix) {
 			return def, true
 		}
 	}
 	// No prefixed agent matched. Fall back to Claude only
-	// if the ID has no colon (unprefixed).
-	if !strings.Contains(sessionID, ":") {
+	// if the raw ID has no colon (unprefixed).
+	if !strings.Contains(rawID, ":") {
 		if def, ok := AgentByType(AgentClaude); ok {
 			return def, true
 		}
@@ -429,6 +476,14 @@ type ParsedMessage struct {
 	OutputTokens     int
 	HasContextTokens bool
 	HasOutputTokens  bool
+
+	// ClaudeMessageID and ClaudeRequestID hold the provider's
+	// per-response identifiers. Used for cross-file / cross-session
+	// deduplication when summing token usage, matching ccusage's
+	// `${messageId}:${requestId}` hash. Only populated by the
+	// Claude parser; empty for all other agents.
+	ClaudeMessageID string
+	ClaudeRequestID string
 
 	// tokenPresenceKnown marks per-message token coverage as
 	// parser-owned and authoritative.

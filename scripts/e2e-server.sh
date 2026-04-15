@@ -53,5 +53,5 @@ VSCODE_COPILOT_DIR="$EMPTY_DIR" \
 PI_DIR="$EMPTY_DIR" \
 OPENCLAW_DIR="$EMPTY_DIR" \
 exec "$SERVER" \
-  -port 8090 \
-  -no-browser
+  --port 8090 \
+  --no-browser

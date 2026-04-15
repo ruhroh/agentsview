@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -14,28 +13,12 @@ import (
 	"github.com/wesm/agentsview/internal/importer"
 )
 
-func runImport(args []string) {
-	fs := flag.NewFlagSet("import", flag.ContinueOnError)
-	importType := fs.String(
-		"type", "", "Import type: claude-ai, chatgpt",
-	)
+type ImportConfig struct {
+	Type string
+	Path string
+}
 
-	if err := fs.Parse(args); err != nil {
-		os.Exit(1)
-	}
-
-	if *importType == "" || fs.NArg() == 0 {
-		fmt.Fprintln(os.Stderr,
-			"usage: agentsview import --type <type> <path>")
-		fmt.Fprintln(os.Stderr,
-			"  --type   claude-ai or chatgpt")
-		fmt.Fprintln(os.Stderr,
-			"  <path>   directory, .json, or .zip file")
-		os.Exit(1)
-	}
-
-	path := fs.Arg(0)
-
+func runImport(cfg ImportConfig) {
 	appCfg, err := config.LoadMinimal()
 	if err != nil {
 		log.Fatalf("loading config: %v", err)
@@ -50,7 +33,7 @@ func runImport(args []string) {
 	ctx := context.Background()
 
 	// Handle zip files.
-	dir, cleanup, err := resolveImportSource(path)
+	dir, cleanup, err := resolveImportSource(cfg.Path)
 	if err != nil {
 		log.Fatalf("Error: %v", err)
 	}
@@ -60,7 +43,7 @@ func runImport(args []string) {
 
 	var stats importer.ImportStats
 
-	switch *importType {
+	switch cfg.Type {
 	case "claude-ai":
 		stats, err = runClaudeAIImport(ctx, database, dir)
 	case "chatgpt":
@@ -71,7 +54,7 @@ func runImport(args []string) {
 	default:
 		log.Fatalf(
 			"Unknown import type: %s (use claude-ai or chatgpt)",
-			*importType,
+			cfg.Type,
 		)
 	}
 

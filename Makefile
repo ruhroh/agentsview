@@ -11,7 +11,13 @@ LDFLAGS := -X main.version=$(VERSION) \
 LDFLAGS_RELEASE := $(LDFLAGS) -s -w
 DESKTOP_DIST_DIR := dist/desktop
 
-.PHONY: build build-release install frontend frontend-dev dev desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app test test-short test-postgres test-postgres-ci postgres-up postgres-down e2e vet lint lint-ci tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir help
+GOPATH_FIRST := $(shell go env GOPATH | cut -d: -f1)
+AIR_BIN := $(shell if command -v air >/dev/null 2>&1; then command -v air; \
+	elif [ -n "$$(go env GOBIN)" ] && [ -x "$$(go env GOBIN)/air" ]; then printf "%s" "$$(go env GOBIN)/air"; \
+	elif [ -x "$(GOPATH_FIRST)/bin/air" ]; then printf "%s" "$(GOPATH_FIRST)/bin/air"; \
+	fi)
+
+.PHONY: build build-release install frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app test test-short test-postgres test-postgres-ci postgres-up postgres-down test-ssh test-ssh-ci ssh-up ssh-down e2e vet lint lint-ci tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir help
 
 # Ensure go:embed has at least one file (no-op if frontend is built)
 ensure-embed-dir:
@@ -55,9 +61,21 @@ frontend:
 frontend-dev:
 	cd frontend && npm run dev
 
-# Run Go server in dev mode (no embedded frontend)
-dev: ensure-embed-dir
-	go run -tags fts5 -ldflags="$(LDFLAGS)" ./cmd/agentsview $(ARGS)
+# Ensure air is installed for backend live reload
+check-air:
+	@if [ -z "$(AIR_BIN)" ]; then \
+		echo "air not found. Install with: make air-install" >&2; \
+		exit 1; \
+	fi
+
+# Install air for backend live reload
+air-install:
+	go install github.com/air-verse/air@latest
+
+# Run Go server in dev mode with live reload (use with frontend-dev).
+# Edits to .go files trigger a rebuild + restart via air.
+dev: ensure-embed-dir check-air
+	"$(AIR_BIN)" -c .air.toml -- $(ARGS)
 
 # Run the Tauri desktop wrapper in development mode
 desktop-dev:
@@ -160,6 +178,26 @@ test-postgres: ensure-embed-dir postgres-up
 test-postgres-ci: ensure-embed-dir
 	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./internal/postgres/... -count=1
 
+# Start test SSH container
+ssh-up:
+	docker compose -f docker-compose.test.yml up -d --build --wait sshd
+	docker cp "$$(docker compose -f docker-compose.test.yml ps -q sshd)":/tmp/test_ssh_key testdata/ssh/test_key
+	chmod 600 testdata/ssh/test_key
+
+# Stop test SSH container
+ssh-down:
+	docker compose -f docker-compose.test.yml down sshd
+
+# Run SSH integration tests (starts sshd automatically)
+test-ssh: ensure-embed-dir ssh-up
+	TEST_SSH_HOST=localhost TEST_SSH_PORT=2222 TEST_SSH_USER=testuser \
+		TEST_SSH_KEY=$(CURDIR)/testdata/ssh/test_key \
+		CGO_ENABLED=1 go test -tags "fts5,sshtest" -v ./internal/ssh/... -count=1
+
+# SSH integration tests for CI (sshd already running)
+test-ssh-ci: ensure-embed-dir
+	CGO_ENABLED=1 go test -tags "fts5,sshtest" -v ./internal/ssh/... -count=1
+
 # Run Playwright E2E tests
 e2e:
 	cd frontend && npx playwright test
@@ -191,7 +229,7 @@ tidy:
 # Clean build artifacts
 clean:
 	rm -f agentsview agentsv
-	rm -rf internal/web/dist dist/
+	rm -rf internal/web/dist dist/ tmp/
 
 # Build release binary for current platform (CGO required for sqlite3)
 release: frontend
@@ -235,7 +273,8 @@ help:
 	@echo "  build-release  - Release build (optimized, stripped)"
 	@echo "  install        - Build and install to ~/.local/bin or GOPATH"
 	@echo ""
-	@echo "  dev            - Run Go server (use with frontend-dev)"
+	@echo "  dev            - Run Go server with live reload via air (use with frontend-dev)"
+	@echo "  air-install    - Install air for backend live reload"
 	@echo "  frontend       - Build frontend SPA"
 	@echo "  frontend-dev   - Run Vite dev server"
 	@echo "  desktop-dev    - Run Tauri desktop wrapper in dev mode"
@@ -251,6 +290,9 @@ help:
 	@echo "  test-postgres  - Run PostgreSQL integration tests"
 	@echo "  postgres-up    - Start test PostgreSQL container"
 	@echo "  postgres-down  - Stop test PostgreSQL container"
+	@echo "  test-ssh       - Run SSH integration tests"
+	@echo "  ssh-up         - Start test SSH container"
+	@echo "  ssh-down       - Stop test SSH container"
 	@echo "  e2e            - Run Playwright E2E tests"
 	@echo "  vet            - Run go vet"
 	@echo "  lint           - Run golangci-lint (auto-fix)"

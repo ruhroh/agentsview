@@ -719,3 +719,41 @@ func TestTruncateRespectsRuneBoundaries(t *testing.T) {
 		})
 	}
 }
+
+func TestParseClaudeSession_ExtractsMessageIDAndRequestID(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sess-1.jsonl")
+	// Single assistant line with usage + id + requestId.
+	line := `{"type":"assistant","uuid":"u1","parentUuid":"",` +
+		`"timestamp":"2026-04-10T10:00:00.000Z",` +
+		`"requestId":"req_01ABC",` +
+		`"message":{"id":"msg_01XYZ","model":"claude-opus-4-6",` +
+		`"content":[{"type":"text","text":"hi"}],` +
+		`"usage":{"input_tokens":10,"output_tokens":20,` +
+		`"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}`
+	if err := os.WriteFile(path, []byte(line+"\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	results, err := ParseClaudeSession(path, "proj", "m")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results = %d, want 1", len(results))
+	}
+	msgs := results[0].Messages
+	if len(msgs) != 1 {
+		t.Fatalf("messages = %d, want 1", len(msgs))
+	}
+	m := msgs[0]
+	if m.ClaudeMessageID != "msg_01XYZ" {
+		t.Errorf("ClaudeMessageID = %q, want msg_01XYZ", m.ClaudeMessageID)
+	}
+	if m.ClaudeRequestID != "req_01ABC" {
+		t.Errorf("ClaudeRequestID = %q, want req_01ABC", m.ClaudeRequestID)
+	}
+	if m.OutputTokens != 20 {
+		t.Errorf("OutputTokens = %d, want 20", m.OutputTokens)
+	}
+}

@@ -465,6 +465,322 @@ func TestGenerateExportHTML_NilStartedAt(t *testing.T) {
 	}
 }
 
+func TestGenerateExportMarkdown_Structure(t *testing.T) {
+	t.Parallel()
+	session := testSession(func(s *db.Session) {
+		s.Project = "my-project"
+		s.MessageCount = 2
+	})
+	msgs := []db.Message{
+		{
+			SessionID: "test-id",
+			Ordinal:   0,
+			Role:      "user",
+			Content:   "Hello <agent>",
+			Timestamp: "2025-01-15T10:00:00Z",
+		},
+		{
+			SessionID:   "test-id",
+			Ordinal:     1,
+			Role:        "assistant",
+			Content:     "[Thinking]\nNeed inspect.\n\n[Task]\nworking",
+			Timestamp:   "2025-01-15T10:00:05Z",
+			HasThinking: true,
+			HasToolUse:  true,
+			ToolCalls: []db.ToolCall{{
+				ToolName:      "Task",
+				Category:      "Task",
+				ToolUseID:     "toolu_1",
+				InputJSON:     `{"prompt":"inspect repo"}`,
+				ResultContent: "done",
+			}},
+		},
+	}
+
+	out := generateExportMarkdown(session, msgs, exportMarkdownOptions{})
+	assertContainsAll(t, out, []string{
+		"# Session: my-project",
+		`<session id="test-id" project="my-project" agent="Claude"`,
+		`<message role="user" ordinal="0"`,
+		"Hello &lt;agent&gt;",
+		`<thinking><![CDATA[` + "\nNeed inspect.\n" + `]]></thinking>`,
+		`<tool_call id="toolu_1" name="Task" category="Task">`,
+		`<arguments><![CDATA[` + "\n{\"prompt\":\"inspect repo\"}\n" + `]]></arguments>`,
+		`<tool_body><![CDATA[` + "\ninspect repo\n" + `]]></tool_body>`,
+		`<tool_result><![CDATA[` + "\ndone\n" + `]]></tool_result>`,
+	})
+}
+
+func TestGenerateExportMarkdown_SerializesCodeSkillAndCDATAFallback(t *testing.T) {
+	t.Parallel()
+	session := testSession()
+	msgs := []db.Message{{
+		SessionID: "test-id",
+		Ordinal:   0,
+		Role:      "assistant",
+		Content: "```go\nfmt.Println(\"hi\")\n```\n\n" +
+			"[Skill: planner]\nuse ]]> carefully\n[/Skill]",
+		Timestamp: "2025-01-15T10:00:00Z",
+	}}
+
+	out := generateExportMarkdown(session, msgs, exportMarkdownOptions{})
+	assertContainsAll(t, out, []string{
+		`<code_block language="go"><![CDATA[` + "\nfmt.Println(\"hi\")\n" + `]]></code_block>`,
+		`<skill name="planner">use ]]&gt; carefully</skill>`,
+	})
+}
+
+func TestGenerateExportMarkdown_OmitsEmptyOptionalAttributes(t *testing.T) {
+	t.Parallel()
+	session := testSession(func(s *db.Session) {
+		s.StartedAt = nil
+	})
+	childStarted := "2025-01-15T10:05:00Z"
+	out := generateExportMarkdownTree(&exportSessionTree{
+		Session: session,
+		Messages: []db.Message{{
+			SessionID:  "test-id",
+			Ordinal:    0,
+			Role:       "assistant",
+			Content:    "[Read file.go]\nbody",
+			HasToolUse: true,
+			ToolCalls: []db.ToolCall{{
+				ToolName:  "Read",
+				Category:  "Read",
+				ToolUseID: "toolu_1",
+			}},
+		}},
+		AppendedChildren: []*exportSessionTree{{
+			Session: &db.Session{
+				ID:              "child-1",
+				Project:         "proj",
+				Agent:           "claude",
+				ParentSessionID: dbtest.Ptr("test-id"),
+				StartedAt:       &childStarted,
+			},
+		}},
+	}, exportMarkdownOptions{})
+	assertContainsAll(t, out, []string{
+		`<tool_call id="toolu_1" name="Read" category="Read">`,
+		`<child_session id="child-1" parent_session_id="test-id" project="proj" agent="Claude" started_at="2025-01-15T10:05:00Z">`,
+	})
+	assertContainsNone(t, out, []string{
+		`relationship=""`,
+		`started_at=""`,
+	})
+}
+
+func TestGenerateExportMarkdown_PreservesMultiWordToolNamesAndResultEvents(t *testing.T) {
+	t.Parallel()
+	session := testSession()
+	msgs := []db.Message{{
+		SessionID:   "test-id",
+		Ordinal:     0,
+		Role:        "assistant",
+		Content:     "[Todo List]\nplan work",
+		HasToolUse:  true,
+		Timestamp:   "2025-01-15T10:00:00Z",
+		ToolCalls:   nil,
+		HasThinking: false,
+	}}
+	out := generateExportMarkdown(session, msgs, exportMarkdownOptions{})
+	assertContainsAll(t, out, []string{
+		`<tool_call name="Todo List" category="Todo List">`,
+		`<tool_body><![CDATA[` + "\nplan work\n" + `]]></tool_body>`,
+	})
+
+	msgs[0].Content = "[Bash]\n$ echo hi"
+	msgs[0].ToolCalls = []db.ToolCall{{
+		ToolName:  "Bash",
+		Category:  "Bash",
+		ToolUseID: "toolu_bash",
+		ResultEvents: []db.ToolResultEvent{{
+			ToolUseID: "toolu_bash",
+			Source:    "subagent_notification",
+			Status:    "running",
+			Content:   "still working",
+		}},
+	}}
+	out = generateExportMarkdown(session, msgs, exportMarkdownOptions{})
+	assertContainsAll(t, out, []string{
+		`<tool_result tool_call_id="toolu_bash" source="subagent_notification" status="running"><![CDATA[` + "\nstill working\n" + `]]></tool_result>`,
+	})
+}
+
+func TestGenerateExportMarkdown_EmitsEmptyMessages(t *testing.T) {
+	t.Parallel()
+	session := testSession()
+	msgs := []db.Message{{
+		SessionID: "test-id",
+		Ordinal:   0,
+		Role:      "assistant",
+		Content:   "",
+	}}
+	out := generateExportMarkdown(session, msgs, exportMarkdownOptions{})
+	assertContainsAll(t, out, []string{
+		`<message role="assistant" ordinal="0"></message>`,
+	})
+}
+
+func TestGenerateExportMarkdown_SanitizesHeadingAndAvoidsDuplicateAnchors(t *testing.T) {
+	t.Parallel()
+	session := testSession(func(s *db.Session) {
+		s.Project = "proj\n<script>alert(1)</script>"
+	})
+	child := &exportSessionTree{
+		Session: &db.Session{
+			ID:               "child-a",
+			Project:          "proj",
+			Agent:            "claude",
+			ParentSessionID:  dbtest.Ptr("test-id"),
+			RelationshipType: "subagent",
+		},
+		Messages: []db.Message{{
+			SessionID: "child-a",
+			Ordinal:   0,
+			Role:      "assistant",
+			Content:   "child message",
+		}},
+	}
+	msgs := []db.Message{{
+		SessionID:  "test-id",
+		Ordinal:    0,
+		Role:       "assistant",
+		Content:    "[Task]\none\n\n[Task]\ntwo",
+		HasToolUse: true,
+		ToolCalls: []db.ToolCall{
+			{ToolName: "Task", Category: "Task", ToolUseID: "toolu_1", SubagentSessionID: "child-a"},
+			{ToolName: "Task", Category: "Task", ToolUseID: "toolu_2", SubagentSessionID: "child-a"},
+		},
+	}}
+	out := generateExportMarkdownTree(&exportSessionTree{
+		Session:          session,
+		Messages:         msgs,
+		AnchoredChildren: map[string]*exportSessionTree{"child-a": child},
+	}, exportMarkdownOptions{Depth: "all"})
+	assertContainsNone(t, out, []string{"# Session: proj\n<script>alert(1)</script>"})
+	if strings.Count(out, `<subagent_session id="child-a"`) != 1 {
+		t.Fatalf("expected child session once, got:\n%s", out)
+	}
+}
+
+func TestGenerateExportMarkdown_DoesNotParseToolMarkersInsideCodeBlocks(t *testing.T) {
+	t.Parallel()
+	session := testSession(func(s *db.Session) {
+		s.Project = "proj\\[link]\x00"
+	})
+	msgs := []db.Message{{
+		SessionID: "test-id",
+		Ordinal:   0,
+		Role:      "assistant",
+		Content:   "```txt\n[Task]\nnot tool\n```",
+	}}
+	out := generateExportMarkdown(session, msgs, exportMarkdownOptions{})
+	assertContainsAll(t, out, []string{
+		`<code_block language="txt"><![CDATA[` + "\n[Task]\nnot tool\n" + `]]></code_block>`,
+	})
+	assertContainsNone(t, out, []string{`<tool_call`, "\x00", "# Session: proj\\[link]"})
+}
+
+func TestGenerateExportMarkdown_StripsXMLInvalidControlChars(t *testing.T) {
+	t.Parallel()
+	session := testSession()
+	msgs := []db.Message{{
+		SessionID:  "test-id",
+		Ordinal:    0,
+		Role:       "assistant",
+		Content:    "[Bash]\n$ printf hi",
+		HasToolUse: true,
+		ToolCalls: []db.ToolCall{{
+			ToolName:      "Bash",
+			Category:      "Bash",
+			ResultContent: "ok\x1b[31mred\x00",
+		}},
+	}}
+	out := generateExportMarkdown(session, msgs, exportMarkdownOptions{})
+	assertContainsNone(t, out, []string{"\x1b", "\x00"})
+}
+
+func TestGenerateExportMarkdown_SeparatesAdjacentLegacyBlocks(t *testing.T) {
+	t.Parallel()
+	session := testSession()
+	msgs := []db.Message{{
+		SessionID:  "test-id",
+		Ordinal:    0,
+		Role:       "assistant",
+		Content:    "[Read file-a.go]\nbody one\n[Grep TODO]\nbody two\n```txt\n[Task]\ncode only\n```",
+		HasToolUse: true,
+	}}
+	out := generateExportMarkdown(session, msgs, exportMarkdownOptions{})
+	assertContainsAll(t, out, []string{
+		`<tool_call name="Read" category="Read">`,
+		`<tool_body><![CDATA[` + "\nbody one\n" + `]]></tool_body>`,
+		`<tool_call name="Grep" category="Grep">`,
+		`<tool_body><![CDATA[` + "\nbody two\n" + `]]></tool_body>`,
+		`<code_block language="txt"><![CDATA[` + "\n[Task]\ncode only\n" + `]]></code_block>`,
+	})
+}
+
+func TestGenerateExportMarkdown_PreservesFollowingTextAfterMultilineBash(t *testing.T) {
+	t.Parallel()
+	session := testSession()
+	cmd := "for x in a; do\n  echo done\ndone"
+	msgs := []db.Message{{
+		SessionID:  "test-id",
+		Ordinal:    0,
+		Role:       "assistant",
+		Content:    "[Bash]\n$ " + cmd + "\n\ndone",
+		HasToolUse: true,
+		ToolCalls: []db.ToolCall{{
+			ToolName:  "Bash",
+			Category:  "Bash",
+			InputJSON: `{"command":"` + "for x in a; do\\n  echo done\\ndone" + `"}`,
+		}},
+	}}
+	out := generateExportMarkdown(session, msgs, exportMarkdownOptions{})
+	assertContainsAll(t, out, []string{
+		`<tool_body><![CDATA[` + "\n$ " + cmd + "\n" + `]]></tool_body>`,
+		"\ndone\n</message>",
+	})
+}
+
+func TestGenerateExportMarkdown_SeparatesEmptyLegacyBlocks(t *testing.T) {
+	t.Parallel()
+	session := testSession()
+	msgs := []db.Message{{
+		SessionID:  "test-id",
+		Ordinal:    0,
+		Role:       "assistant",
+		Content:    "[Task]\n[Grep TODO]\nbody two\n[Thinking]\n```txt\ncode only\n```",
+		HasToolUse: true,
+	}}
+	out := generateExportMarkdown(session, msgs, exportMarkdownOptions{})
+	assertContainsAll(t, out, []string{
+		`<tool_call name="Task" category="Task">`,
+		`<tool_call name="Grep" category="Grep">`,
+		`<tool_body><![CDATA[` + "\nbody two\n" + `]]></tool_body>`,
+		`<thinking><![CDATA[` + "\n\n" + `]]></thinking>`,
+		`<code_block language="txt"><![CDATA[` + "\ncode only\n" + `]]></code_block>`,
+	})
+}
+
+func TestGenerateExportMarkdown_PreservesInlineBracketsInLegacyBodies(t *testing.T) {
+	t.Parallel()
+	session := testSession()
+	msgs := []db.Message{{
+		SessionID:  "test-id",
+		Ordinal:    0,
+		Role:       "assistant",
+		Content:    "[Bash]\n$ test [ -f foo ] && echo ```not fence```",
+		HasToolUse: true,
+	}}
+	out := generateExportMarkdown(session, msgs, exportMarkdownOptions{})
+	assertContainsAll(t, out, []string{
+		`<tool_call name="Bash" category="Bash">`,
+		`<tool_body><![CDATA[` + "\n$ test [ -f foo ] && echo ```not fence```\n" + `]]></tool_body>`,
+	})
+}
+
 func TestSanitizeFilename(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

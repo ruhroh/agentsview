@@ -29,6 +29,18 @@ type EngineConfig struct {
 	AgentDirs               map[parser.AgentType][]string
 	Machine                 string
 	BlockedResultCategories []string
+	// IDPrefix is prepended to all session IDs. Used by
+	// remote sync to namespace IDs by host (e.g. "host~").
+	IDPrefix string
+	// PathRewriter transforms file paths before storage.
+	// Used by remote sync to replace temp paths with
+	// "host:/remote/path" references.
+	PathRewriter func(string) string
+	// Ephemeral disables sync-state persistence (timestamps
+	// and skip cache) so remote sync does not interfere with
+	// local sync watermarks or pollute the skipped_files table
+	// with temp-dir paths.
+	Ephemeral bool
 }
 
 // Engine orchestrates session file discovery and sync.
@@ -48,19 +60,35 @@ type Engine struct {
 	// retried when its mtime changes.
 	skipMu    gosync.RWMutex
 	skipCache map[string]int64
+	// idPrefix and pathRewriter support remote sync:
+	// prefix all session IDs to avoid collisions, rewrite
+	// temp paths to "host:/remote/path" form.
+	ephemeral    bool
+	idPrefix     string
+	pathRewriter func(string) string
 }
+
+// codexExecMigrationKey is the pg_sync_state flag that
+// records whether the one-time cleanup of legacy codex_exec
+// skip cache entries has already run on this database.
+const codexExecMigrationKey = "codex_exec_legacy_migration_v1"
 
 // NewEngine creates a sync engine. It pre-populates the
 // in-memory skip cache from the database so that files
-// skipped in a prior run are not re-parsed on startup.
+// skipped in a prior run are not re-parsed on startup, and
+// migrates legacy codex_exec skip entries on first run under
+// the new bulk-sync behavior.
 func NewEngine(
 	database *db.DB, cfg EngineConfig,
 ) *Engine {
 	skipCache := make(map[string]int64)
-	if loaded, err := database.LoadSkippedFiles(); err == nil {
-		skipCache = loaded
-	} else {
-		log.Printf("loading skip cache: %v", err)
+	if !cfg.Ephemeral {
+		if loaded, err := database.LoadSkippedFiles(); err == nil {
+			skipCache = loaded
+		} else {
+			log.Printf("loading skip cache: %v", err)
+		}
+		migrateLegacyCodexExecSkips(database, skipCache)
 	}
 
 	dirs := make(map[parser.AgentType][]string, len(cfg.AgentDirs))
@@ -74,6 +102,75 @@ func NewEngine(
 		machine:                 cfg.Machine,
 		blockedResultCategories: blockedCategorySet(cfg.BlockedResultCategories),
 		skipCache:               skipCache,
+		ephemeral:               cfg.Ephemeral,
+		idPrefix:                cfg.IDPrefix,
+		pathRewriter:            cfg.PathRewriter,
+	}
+}
+
+// migrateLegacyCodexExecSkips removes skip cache entries
+// created by older agentsview builds that excluded Codex exec
+// sessions from bulk sync. The scrub runs once per database:
+// a `pg_sync_state` flag is set after the first successful
+// pass so subsequent process starts do not re-scan files.
+// New skip entries for real parse errors on exec files are
+// untouched here and honored normally on later syncs.
+//
+// The cleanup builds a rebuilt snapshot and writes it through
+// the atomic ReplaceSkippedFiles, then only mutates the
+// in-memory map and records the done flag after the persist
+// succeeds. A partial failure leaves both the DB and the
+// in-memory cache in their prior state so the migration is
+// retried on the next startup rather than being falsely
+// marked complete.
+func migrateLegacyCodexExecSkips(
+	database *db.DB, skipCache map[string]int64,
+) {
+	done, err := database.GetSyncState(codexExecMigrationKey)
+	if err != nil {
+		log.Printf("codex exec migration: %v", err)
+		return
+	}
+	if done != "" {
+		return
+	}
+
+	cleaned := make(map[string]int64, len(skipCache))
+	var legacy []string
+	for path, mtime := range skipCache {
+		if strings.HasSuffix(path, ".jsonl") &&
+			parser.IsCodexExecSessionFile(path) {
+			legacy = append(legacy, path)
+			continue
+		}
+		cleaned[path] = mtime
+	}
+
+	if len(legacy) > 0 {
+		if err := database.ReplaceSkippedFiles(
+			cleaned,
+		); err != nil {
+			log.Printf(
+				"codex exec migration: persist cleaned skip cache: %v",
+				err,
+			)
+			return
+		}
+		for _, p := range legacy {
+			delete(skipCache, p)
+		}
+		log.Printf(
+			"codex exec legacy migration: cleared %d skip entries",
+			len(legacy),
+		)
+	}
+
+	if err := database.SetSyncState(
+		codexExecMigrationKey, "done",
+	); err != nil {
+		log.Printf(
+			"codex exec migration: set flag: %v", err,
+		)
 	}
 }
 
@@ -343,6 +440,38 @@ func (e *Engine) classifyOnePath(
 				Path:    path,
 				Project: project,
 				Agent:   parser.AgentGemini,
+			}, true
+		}
+	}
+
+	// OpenHands CLI:
+	//   <openhandsDir>/<conversation-id>/base_state.json
+	//   <openhandsDir>/<conversation-id>/TASKS.json
+	//   <openhandsDir>/<conversation-id>/events/*.json
+	for _, openHandsDir := range e.agentDirs[parser.AgentOpenHands] {
+		if openHandsDir == "" {
+			continue
+		}
+		if rel, ok := isUnder(openHandsDir, path); ok {
+			parts := strings.Split(rel, sep)
+			if len(parts) < 2 || !parser.IsValidSessionID(parts[0]) {
+				continue
+			}
+			switch {
+			case len(parts) == 2 &&
+				(parts[1] == "base_state.json" ||
+					parts[1] == "TASKS.json"):
+			case len(parts) == 3 &&
+				parts[1] == "events" &&
+				strings.HasSuffix(parts[2], ".json"):
+			default:
+				continue
+			}
+			return parser.DiscoveredFile{
+				Path: filepath.Join(
+					openHandsDir, parts[0],
+				),
+				Agent: parser.AgentOpenHands,
 			}, true
 		}
 	}
@@ -684,7 +813,7 @@ func (e *Engine) ResyncAll(
 
 	// 3. Point engine at newDB and sync into it.
 	e.db = newDB
-	stats := e.syncAllLocked(ctx, onProgress)
+	stats := e.syncAllLocked(ctx, onProgress, time.Time{})
 	e.db = origDB // restore immediately
 
 	// Abort swap when the fresh DB would be worse than the
@@ -878,21 +1007,60 @@ func removeWAL(path string) {
 	os.Remove(path + "-shm")
 }
 
+// Sync state keys persisted in pg_sync_state.
+const (
+	syncStateStartedAt  = "last_sync_started_at"
+	syncStateFinishedAt = "last_sync_finished_at"
+)
+
+// LastSyncStartedAt returns the recorded start time of the
+// most recent sync. Returns zero time if no sync has run.
+// Use this as the mtime cutoff for quick incremental syncs —
+// anything modified at or after this time must be re-evaluated.
+func (e *Engine) LastSyncStartedAt() time.Time {
+	raw, err := e.db.GetSyncState(syncStateStartedAt)
+	if err != nil || raw == "" {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
 // SyncAll discovers and syncs all session files from all agents.
 func (e *Engine) SyncAll(
 	ctx context.Context, onProgress ProgressFunc,
 ) SyncStats {
 	e.syncMu.Lock()
 	defer e.syncMu.Unlock()
-	return e.syncAllLocked(ctx, onProgress)
+	return e.syncAllLocked(ctx, onProgress, time.Time{})
+}
+
+// SyncAllSince syncs only files whose mtime is at or after
+// the given cutoff time. Use a zero time to sync everything
+// (equivalent to SyncAll). The cutoff is applied after
+// discovery; directory traversal still walks all session
+// directories. Typical callers pass a small safety margin
+// behind the last successful sync start to avoid missing
+// files that were being written during a prior sync.
+func (e *Engine) SyncAllSince(
+	ctx context.Context, since time.Time, onProgress ProgressFunc,
+) SyncStats {
+	e.syncMu.Lock()
+	defer e.syncMu.Unlock()
+	return e.syncAllLocked(ctx, onProgress, since)
 }
 
 func (e *Engine) syncAllLocked(
-	ctx context.Context, onProgress ProgressFunc,
+	ctx context.Context, onProgress ProgressFunc, since time.Time,
 ) SyncStats {
 	if ctx.Err() != nil {
 		return SyncStats{Aborted: true}
 	}
+
+	e.recordSyncStarted()
 
 	t0 := time.Now()
 
@@ -907,6 +1075,10 @@ func (e *Engine) syncAllLocked(
 			counts[def.Type] += len(found)
 			all = append(all, found...)
 		}
+	}
+
+	if !since.IsZero() {
+		all = filterFilesByMtime(all, since)
 	}
 
 	verbose := onProgress == nil
@@ -1058,7 +1230,58 @@ func (e *Engine) syncAllLocked(
 	e.lastSync = time.Now()
 	e.lastSyncStats = stats
 	e.mu.Unlock()
+
+	e.recordSyncFinished()
 	return stats
+}
+
+// recordSyncStarted persists the start time of a sync run
+// into pg_sync_state. Callers use this to compute mtime
+// cutoffs for future quick incremental syncs.
+func (e *Engine) recordSyncStarted() {
+	if e.ephemeral {
+		return
+	}
+	ts := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := e.db.SetSyncState(syncStateStartedAt, ts); err != nil {
+		log.Printf("persist sync start time: %v", err)
+	}
+}
+
+// recordSyncFinished persists the finish time of a completed
+// sync run. Only called on successful completion (not on
+// cancellation or abort).
+func (e *Engine) recordSyncFinished() {
+	if e.ephemeral {
+		return
+	}
+	ts := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := e.db.SetSyncState(syncStateFinishedAt, ts); err != nil {
+		log.Printf("persist sync finish time: %v", err)
+	}
+}
+
+// filterFilesByMtime returns only files whose mtime is at or
+// after the given cutoff. Files that can't be stat'd are kept
+// (so errors surface in the worker rather than being silently
+// dropped). The cost is one stat per file — acceptable for
+// polling use cases where most files will be skipped.
+func filterFilesByMtime(
+	files []parser.DiscoveredFile, cutoff time.Time,
+) []parser.DiscoveredFile {
+	cutoffNs := cutoff.UnixNano()
+	out := files[:0]
+	for _, f := range files {
+		info, err := os.Stat(f.Path)
+		if err != nil {
+			out = append(out, f)
+			continue
+		}
+		if info.ModTime().UnixNano() >= cutoffNs {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // syncOpenCode syncs sessions from OpenCode SQLite databases.
@@ -1341,9 +1564,21 @@ func (e *Engine) processFile(
 	// Capture mtime once from the initial stat so all
 	// downstream cache operations use a consistent value.
 	mtime := info.ModTime().UnixNano()
+	if file.Agent == parser.AgentOpenHands {
+		snapshot, err := parser.OpenHandsSnapshot(file.Path)
+		if err != nil {
+			return processResult{err: err}
+		}
+		mtime = snapshot.Mtime
+	}
 
 	// Skip files cached from a previous sync (parse errors
 	// or non-interactive sessions) whose mtime is unchanged.
+	// Legacy codex_exec entries from pre-bulk-sync builds are
+	// scrubbed once at engine construction by
+	// migrateLegacyCodexExecSkips, so this check can treat
+	// the skip cache as authoritative without per-file
+	// re-validation.
 	e.skipMu.RLock()
 	cachedMtime, cached := e.skipCache[file.Path]
 	e.skipMu.RUnlock()
@@ -1361,6 +1596,8 @@ func (e *Engine) processFile(
 		res = e.processCopilot(file, info)
 	case parser.AgentGemini:
 		res = e.processGemini(file, info)
+	case parser.AgentOpenHands:
+		res = e.processOpenHands(file, info)
 	case parser.AgentCursor:
 		res = e.processCursor(file, info)
 	case parser.AgentIflow:
@@ -1385,6 +1622,8 @@ func (e *Engine) processFile(
 		res = e.processCortex(file, info)
 	case parser.AgentHermes:
 		res = e.processHermes(file, info)
+	case parser.AgentPositron:
+		res = e.processPositron(file, info)
 	default:
 		res = processResult{
 			err: fmt.Errorf(
@@ -1413,10 +1652,32 @@ func (e *Engine) clearSkip(path string) {
 	_ = e.db.DeleteSkippedFile(path)
 }
 
+// InjectSkipCache merges entries into the in-memory skip
+// cache. Used by remote sync to pre-populate with
+// translated paths.
+func (e *Engine) InjectSkipCache(entries map[string]int64) {
+	e.skipMu.Lock()
+	defer e.skipMu.Unlock()
+	maps.Copy(e.skipCache, entries)
+}
+
+// SnapshotSkipCache returns a copy of the in-memory skip
+// cache.
+func (e *Engine) SnapshotSkipCache() map[string]int64 {
+	e.skipMu.RLock()
+	defer e.skipMu.RUnlock()
+	out := make(map[string]int64, len(e.skipCache))
+	maps.Copy(out, e.skipCache)
+	return out
+}
+
 // persistSkipCache writes the in-memory skip cache to the
 // database so skipped files survive process restarts.
 // Returns the number of entries persisted.
 func (e *Engine) persistSkipCache() int {
+	if e.ephemeral {
+		return 0
+	}
 	e.skipMu.RLock()
 	snapshot := make(map[string]int64, len(e.skipCache))
 	maps.Copy(snapshot, e.skipCache)
@@ -1438,7 +1699,7 @@ func (e *Engine) shouldSkipFile(
 	sessionID string, info os.FileInfo,
 ) bool {
 	storedSize, storedMtime, ok := e.db.GetSessionFileInfo(
-		sessionID,
+		e.idPrefix + sessionID,
 	)
 	if !ok {
 		return false
@@ -1453,8 +1714,12 @@ func (e *Engine) shouldSkipFile(
 func (e *Engine) shouldSkipByPath(
 	path string, info os.FileInfo,
 ) bool {
+	lookupPath := path
+	if e.pathRewriter != nil {
+		lookupPath = e.pathRewriter(path)
+	}
 	storedSize, storedMtime, ok := e.db.GetFileInfoByPath(
-		path,
+		lookupPath,
 	)
 	if !ok {
 		return false
@@ -1462,6 +1727,23 @@ func (e *Engine) shouldSkipByPath(
 	return storedSize == info.Size() &&
 		storedMtime == info.ModTime().UnixNano()
 }
+
+// fakeSnapshotInfo wraps a pre-computed size and mtime
+// (nanoseconds) as os.FileInfo so that shouldSkipByPath can
+// be reused for OpenHands snapshot-based skip detection.
+type fakeSnapshotInfo struct {
+	fSize  int64
+	fMtime int64
+}
+
+func (f fakeSnapshotInfo) Name() string      { return "" }
+func (f fakeSnapshotInfo) Size() int64       { return f.fSize }
+func (f fakeSnapshotInfo) Mode() os.FileMode { return 0 }
+func (f fakeSnapshotInfo) ModTime() time.Time {
+	return time.Unix(0, f.fMtime)
+}
+func (f fakeSnapshotInfo) IsDir() bool { return false }
+func (f fakeSnapshotInfo) Sys() any    { return nil }
 
 func (e *Engine) processClaude(
 	file parser.DiscoveredFile, info os.FileInfo,
@@ -1471,7 +1753,7 @@ func (e *Engine) processClaude(
 
 	if e.shouldSkipFile(sessionID, info) {
 		sess, _ := e.db.GetSession(
-			context.Background(), sessionID,
+			context.Background(), e.idPrefix+sessionID,
 		)
 		if sess != nil &&
 			sess.Project != "" &&
@@ -1543,7 +1825,11 @@ func (e *Engine) tryIncrementalJSONL(
 	agent parser.AgentType,
 	parseFn incrementalParseFunc,
 ) (processResult, bool) {
-	inc, ok := e.db.GetSessionForIncremental(file.Path)
+	lookupPath := file.Path
+	if e.pathRewriter != nil {
+		lookupPath = e.pathRewriter(file.Path)
+	}
+	inc, ok := e.db.GetSessionForIncremental(lookupPath)
 	if !ok || inc.FileSize <= 0 {
 		return processResult{}, false
 	}
@@ -1656,8 +1942,6 @@ func (e *Engine) processCodex(
 		return processResult{skip: true}
 	}
 
-	// Try incremental parse for append-only JSONL files
-	// that have already been synced.
 	codexParseFn := func(
 		path string, offset int64, startOrd int,
 	) ([]parser.ParsedMessage, time.Time, int64, error) {
@@ -1676,9 +1960,6 @@ func (e *Engine) processCodex(
 	)
 	if err != nil {
 		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{} // non-interactive
 	}
 
 	hash, err := ComputeFileHash(file.Path)
@@ -2013,6 +2294,68 @@ func (e *Engine) processHermes(
 		},
 	}
 }
+
+func (e *Engine) processPositron(
+	file parser.DiscoveredFile, info os.FileInfo,
+) processResult {
+	if e.shouldSkipByPath(file.Path, info) {
+		return processResult{skip: true}
+	}
+
+	sess, msgs, err := parser.ParsePositronSession(
+		file.Path, file.Project, e.machine,
+	)
+	if err != nil {
+		return processResult{err: err}
+	}
+	if sess == nil {
+		return processResult{}
+	}
+
+	hash, err := ComputeFileHash(file.Path)
+	if err == nil {
+		sess.File.Hash = hash
+	}
+
+	return processResult{
+		results: []parser.ParseResult{
+			{Session: *sess, Messages: msgs},
+		},
+	}
+}
+
+func (e *Engine) processOpenHands(
+	file parser.DiscoveredFile, _ os.FileInfo,
+) processResult {
+	snapshot, err := parser.OpenHandsSnapshot(file.Path)
+	if err != nil {
+		return processResult{err: err}
+	}
+
+	fi := fakeSnapshotInfo{
+		fSize: snapshot.Size, fMtime: snapshot.Mtime,
+	}
+	if e.shouldSkipByPath(file.Path, fi) {
+		return processResult{skip: true}
+	}
+
+	sess, msgs, err := parser.ParseOpenHandsSession(
+		file.Path, e.machine,
+	)
+	if err != nil {
+		return processResult{err: err}
+	}
+	if sess == nil {
+		return processResult{}
+	}
+
+	return processResult{
+		results: []parser.ParseResult{
+			{Session: *sess, Messages: msgs},
+		},
+	}
+}
+
 func (e *Engine) processCursor(
 	file parser.DiscoveredFile, info os.FileInfo,
 ) processResult {
@@ -2133,7 +2476,7 @@ func (e *Engine) processIflow(
 
 	if e.shouldSkipFile(sessionID, info) {
 		sess, _ := e.db.GetSession(
-			context.Background(), sessionID,
+			context.Background(), e.idPrefix+sessionID,
 		)
 		if sess != nil &&
 			sess.Project != "" &&
@@ -2185,6 +2528,7 @@ func (e *Engine) writeBatch(batch []pendingWrite) {
 		s := toDBSession(pw)
 		s.MessageCount, s.UserMessageCount =
 			postFilterCounts(msgs)
+		e.applyRemoteRewrites(&s, msgs)
 
 		// UpsertSession first: the session row must exist
 		// before messages can be inserted (FK constraint).
@@ -2208,7 +2552,7 @@ func (e *Engine) writeBatch(batch []pendingWrite) {
 		}
 
 		if err := e.writeMessages(
-			pw.sess.ID, msgs,
+			s.ID, msgs,
 		); err != nil {
 			log.Printf("%v", err)
 			continue
@@ -2327,6 +2671,7 @@ func (e *Engine) writeSessionFull(pw pendingWrite) error {
 	s := toDBSession(pw)
 	s.MessageCount, s.UserMessageCount =
 		postFilterCounts(msgs)
+	e.applyRemoteRewrites(&s, msgs)
 	if err := e.db.UpsertSession(s); err != nil {
 		if errors.Is(err, db.ErrSessionExcluded) {
 			if pw.sess.File.Path != "" {
@@ -2338,15 +2683,51 @@ func (e *Engine) writeSessionFull(pw pendingWrite) error {
 		return err
 	}
 	if err := e.db.ReplaceSessionMessages(
-		pw.sess.ID, msgs,
+		s.ID, msgs,
 	); err != nil {
 		log.Printf(
 			"replace messages for %s: %v",
-			pw.sess.ID, err,
+			s.ID, err,
 		)
 		return err
 	}
 	return nil
+}
+
+// applyRemoteRewrites prefixes session IDs and rewrites
+// file paths for remote sync. No-op when idPrefix is empty.
+func (e *Engine) applyRemoteRewrites(
+	s *db.Session, msgs []db.Message,
+) {
+	if e.idPrefix == "" {
+		return
+	}
+	s.ID = e.idPrefix + s.ID
+	if s.ParentSessionID != nil && *s.ParentSessionID != "" {
+		p := e.idPrefix + *s.ParentSessionID
+		s.ParentSessionID = &p
+	}
+	if e.pathRewriter != nil && s.FilePath != nil {
+		fp := e.pathRewriter(*s.FilePath)
+		s.FilePath = &fp
+	}
+	for i := range msgs {
+		msgs[i].SessionID = s.ID
+		for j := range msgs[i].ToolCalls {
+			msgs[i].ToolCalls[j].SessionID = s.ID
+			if msgs[i].ToolCalls[j].SubagentSessionID != "" {
+				msgs[i].ToolCalls[j].SubagentSessionID =
+					e.idPrefix + msgs[i].ToolCalls[j].SubagentSessionID
+			}
+			for k := range msgs[i].ToolCalls[j].ResultEvents {
+				re := &msgs[i].ToolCalls[j].ResultEvents[k]
+				if re.SubagentSessionID != "" {
+					re.SubagentSessionID =
+						e.idPrefix + re.SubagentSessionID
+				}
+			}
+		}
+	}
 }
 
 // toDBSession converts a pendingWrite to a db.Session.
@@ -2404,6 +2785,8 @@ func toDBMessages(pw pendingWrite, blocked map[string]bool) []db.Message {
 			OutputTokens:     m.OutputTokens,
 			HasContextTokens: hasCtx,
 			HasOutputTokens:  hasOut,
+			ClaudeMessageID:  m.ClaudeMessageID,
+			ClaudeRequestID:  m.ClaudeRequestID,
 			ToolCalls: convertToolCalls(
 				pw.sess.ID, m.ToolCalls,
 			),
@@ -2451,6 +2834,12 @@ func countMessages(batch []pendingWrite) int {
 // ID, e.g. Zencoder header ID vs filename), then falls back
 // to agent-specific path reconstruction.
 func (e *Engine) FindSourceFile(sessionID string) string {
+	host, rawID := parser.StripHostPrefix(sessionID)
+	if host != "" {
+		// Remote sessions have no local source file.
+		return ""
+	}
+
 	def, ok := parser.AgentByPrefix(sessionID)
 	if !ok || !def.FileBased || def.FindSourceFunc == nil {
 		return ""
@@ -2464,21 +2853,27 @@ func (e *Engine) FindSourceFile(sessionID string) string {
 		}
 	}
 
-	rawID := strings.TrimPrefix(sessionID, def.IDPrefix)
+	bareID := strings.TrimPrefix(rawID, def.IDPrefix)
 	for _, d := range e.agentDirs[def.Type] {
-		if f := def.FindSourceFunc(d, rawID); f != "" {
+		if f := def.FindSourceFunc(d, bareID); f != "" {
 			return f
 		}
 	}
 	return ""
 }
 
-// SyncSingleSession re-syncs a single session by its ID.
-// Unlike the bulk SyncAll path, this includes exec-originated
-// Codex sessions and uses the existing DB project as fallback.
+// SyncSingleSession re-syncs a single session by its ID and
+// uses the existing DB project as fallback where applicable.
 func (e *Engine) SyncSingleSession(sessionID string) error {
 	e.syncMu.Lock()
 	defer e.syncMu.Unlock()
+
+	host, _ := parser.StripHostPrefix(sessionID)
+	if host != "" {
+		return fmt.Errorf(
+			"cannot sync remote session %s locally", sessionID,
+		)
+	}
 
 	def, ok := parser.AgentByPrefix(sessionID)
 	if !ok {
@@ -2507,9 +2902,7 @@ func (e *Engine) SyncSingleSession(sessionID string) error {
 	// during a bulk SyncAll.
 	e.clearSkip(path)
 
-	// Reuse processFile for stat and DB-skip logic. For
-	// Claude this is the full pipeline; for Codex we need
-	// includeExec=true so we call the parser directly.
+	// Reuse processFile for stat and DB-skip logic.
 	file := parser.DiscoveredFile{
 		Path:  path,
 		Agent: agent,
@@ -2574,23 +2967,6 @@ func (e *Engine) SyncSingleSession(sessionID string) error {
 		return e.writeIncremental(res.incremental)
 	}
 
-	// For Codex, processFile uses includeExec=false which may
-	// return empty results for exec-originated sessions. Re-parse
-	// with includeExec=true when that happens.
-	if len(res.results) == 0 && agent == parser.AgentCodex {
-		execRes := e.processCodexIncludeExec(file)
-		if execRes.err != nil {
-			if res.mtime != 0 {
-				e.cacheSkip(path, res.mtime)
-			}
-			return execRes.err
-		}
-		if len(execRes.results) == 0 {
-			return nil
-		}
-		res.results = execRes.results
-	}
-
 	if len(res.results) == 0 {
 		return nil
 	}
@@ -2612,30 +2988,6 @@ func (e *Engine) SyncSingleSession(sessionID string) error {
 	}
 
 	return nil
-}
-
-// processCodexIncludeExec re-parses a Codex session with
-// exec-originated sessions included.
-func (e *Engine) processCodexIncludeExec(
-	file parser.DiscoveredFile,
-) processResult {
-	sess, msgs, err := parser.ParseCodexSession(
-		file.Path, e.machine, true,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-	if h, herr := ComputeFileHash(file.Path); herr == nil {
-		sess.File.Hash = h
-	}
-	return processResult{
-		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs},
-		},
-	}
 }
 
 // syncSingleOpenCode re-syncs a single OpenCode session.

@@ -25,7 +25,13 @@ import (
 // formatting changes). Old databases with a lower user_version
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
-const dataVersion = 7
+//
+// Bumped to 11: codex incremental parser was not seeding
+// currentModel from prior turn_context lines, causing all
+// incrementally parsed messages to store an empty model
+// string. The usage query filters these out, so codex cost
+// tracking froze after the initial full parse.
+const dataVersion = 11
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -308,6 +314,14 @@ func (db *DB) migrateColumns() error {
 			"ALTER TABLE messages ADD COLUMN has_output_tokens INTEGER NOT NULL DEFAULT 0",
 		},
 		{
+			"messages", "claude_message_id",
+			"ALTER TABLE messages ADD COLUMN claude_message_id TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"messages", "claude_request_id",
+			"ALTER TABLE messages ADD COLUMN claude_request_id TEXT NOT NULL DEFAULT ''",
+		},
+		{
 			"sessions", "total_output_tokens",
 			"ALTER TABLE sessions ADD COLUMN total_output_tokens INTEGER NOT NULL DEFAULT 0",
 		},
@@ -361,6 +375,19 @@ func (db *DB) migrateColumns() error {
 	}
 	if err := db.backfillIsAutomatedLocked(w); err != nil {
 		return err
+	}
+
+	if _, err := w.Exec(`
+		CREATE TABLE IF NOT EXISTS remote_skipped_files (
+			host       TEXT NOT NULL,
+			path       TEXT NOT NULL,
+			file_mtime INTEGER NOT NULL,
+			PRIMARY KEY (host, path)
+		)`,
+	); err != nil {
+		return fmt.Errorf(
+			"creating remote_skipped_files: %w", err,
+		)
 	}
 
 	runRepair, err := db.shouldRunTokenCoverageRepairLocked(w)

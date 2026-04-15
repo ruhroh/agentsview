@@ -1,8 +1,11 @@
 package parser
 
 import (
+	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -18,6 +21,7 @@ const (
 	codexTypeSessionMeta  = "session_meta"
 	codexTypeResponseItem = "response_item"
 	codexTypeTurnContext  = "turn_context"
+	codexTypeEventMsg     = "event_msg"
 	codexOriginatorExec   = "codex_exec"
 )
 
@@ -35,7 +39,6 @@ type codexSessionBuilder struct {
 	sessionID            string
 	project              string
 	ordinal              int
-	includeExec          bool
 	currentModel         string
 	callNames            map[string]string
 	callRefs             map[string]codexToolCallRef
@@ -43,6 +46,7 @@ type codexSessionBuilder struct {
 	agentWaitCalls       map[string]string
 	pendingAgentEvents   map[string][]codexPendingEvent
 	orphanNotificationIx map[string]int
+	lastTokenUsageRaw    string // dedup streaming duplicates
 }
 
 type codexToolCallRef struct {
@@ -60,11 +64,10 @@ type codexPendingEvent struct {
 }
 
 func newCodexSessionBuilder(
-	includeExec bool,
+	_ bool,
 ) *codexSessionBuilder {
 	return &codexSessionBuilder{
 		project:              "unknown",
-		includeExec:          includeExec,
 		callNames:            make(map[string]string),
 		callRefs:             make(map[string]codexToolCallRef),
 		agentSpawnCalls:      make(map[string]string),
@@ -75,8 +78,6 @@ func newCodexSessionBuilder(
 }
 
 // processLine handles a single non-empty, valid JSON line.
-// Returns (skip=true) if the session should be discarded
-// (e.g. non-interactive codex_exec).
 func (b *codexSessionBuilder) processLine(
 	line string,
 ) (skip bool) {
@@ -102,6 +103,8 @@ func (b *codexSessionBuilder) processLine(
 		b.currentModel = payload.Get("model").Str
 	case codexTypeResponseItem:
 		b.handleResponseItem(payload, ts)
+	case codexTypeEventMsg:
+		b.handleEventMsg(payload)
 	}
 	return false
 }
@@ -120,10 +123,6 @@ func (b *codexSessionBuilder) handleSessionMeta(
 		}
 	}
 
-	if !b.includeExec &&
-		payload.Get("originator").Str == codexOriginatorExec {
-		return true
-	}
 	return false
 }
 
@@ -172,6 +171,63 @@ func (b *codexSessionBuilder) handleResponseItem(
 		Model:         b.currentModel,
 	})
 	b.ordinal++
+}
+
+func (b *codexSessionBuilder) handleEventMsg(
+	payload gjson.Result,
+) {
+	if payload.Get("type").Str != "token_count" {
+		return
+	}
+	raw := payload.Get("info.last_token_usage").Raw
+	if raw == "" || raw == b.lastTokenUsageRaw {
+		return
+	}
+	b.lastTokenUsageRaw = raw
+
+	// Find last assistant message without usage in the current
+	// turn. Stop at user message boundary so we don't cross
+	// turns.
+	for i := len(b.messages) - 1; i >= 0; i-- {
+		if b.messages[i].Role == RoleUser {
+			break
+		}
+		if b.messages[i].Role == RoleAssistant &&
+			b.messages[i].TokenUsage == nil {
+			b.applyCodexTokenUsage(&b.messages[i], raw)
+			return
+		}
+	}
+}
+
+// applyCodexTokenUsage normalizes Codex token usage fields
+// into the format expected by the usage query:
+//
+//	input_tokens        → input_tokens
+//	output_tokens       → output_tokens
+//	cached_input_tokens → cache_read_input_tokens
+func (b *codexSessionBuilder) applyCodexTokenUsage(
+	msg *ParsedMessage, raw string,
+) {
+	usage := gjson.Parse(raw)
+	input := int(usage.Get("input_tokens").Int())
+	cached := int(usage.Get("cached_input_tokens").Int())
+	output := int(usage.Get("output_tokens").Int())
+
+	normalized := map[string]int{
+		"input_tokens":            input,
+		"output_tokens":           output,
+		"cache_read_input_tokens": cached,
+	}
+	j, err := json.Marshal(normalized)
+	if err != nil {
+		return
+	}
+	msg.TokenUsage = j
+	msg.OutputTokens = output
+	msg.HasOutputTokens = output > 0
+	msg.ContextTokens = input + cached
+	msg.HasContextTokens = input > 0 || cached > 0
 }
 
 func (b *codexSessionBuilder) handleFunctionCall(
@@ -962,9 +1018,44 @@ func extractCodexContent(payload gjson.Result) string {
 	return strings.Join(texts, "\n")
 }
 
+// IsCodexExecSessionFile reports whether any session_meta
+// line in a Codex JSONL file has originator=="codex_exec".
+// The pre-bulk-sync parser called handleSessionMeta on every
+// session_meta line and flagged the whole session as exec if
+// any of them carried that originator, so a one-shot check
+// of only the first session_meta would miss files that were
+// originally skipped because a later session_meta set the
+// originator. Scan all session_meta lines to match the old
+// skip condition exactly.
+func IsCodexExecSessionFile(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	s := bufio.NewScanner(f)
+	s.Buffer(make([]byte, 0, 64*1024), maxLineSize)
+	for s.Scan() {
+		line := strings.TrimSpace(s.Text())
+		if line == "" || !gjson.Valid(line) {
+			continue
+		}
+		if gjson.Get(line, "type").Str != codexTypeSessionMeta {
+			continue
+		}
+		if gjson.Get(line, "payload.originator").Str ==
+			codexOriginatorExec {
+			return true
+		}
+	}
+	return false
+}
+
 // ParseCodexSession parses a Codex JSONL session file.
-// Returns nil session if the session is non-interactive and
-// includeExec is false.
+// The includeExec parameter is retained for backward
+// compatibility; exec-originated sessions are now always
+// parsed and imported.
 func ParseCodexSession(
 	path, machine string, includeExec bool,
 ) (*ParsedSession, []ParsedMessage, error) {
@@ -1035,7 +1126,50 @@ func ParseCodexSession(
 		},
 	}
 
+	accumulateMessageTokenUsage(sess, b.messages)
+
 	return sess, b.messages, nil
+}
+
+// readCodexModelAtOffset scans a Codex JSONL file from the
+// start up to the given byte offset and returns the model
+// from the most recent turn_context entry. Returns "" when
+// no turn_context is found before the offset. Used to seed
+// currentModel for incremental parses that resume past turn
+// boundaries.
+// readCodexModelAtOffset scans a Codex JSONL file from the
+// start up to the given byte offset and returns the model
+// from the most recent turn_context entry. Mirrors the full
+// parser: every turn_context unconditionally overwrites the
+// model, including empty strings. Returns "" when no
+// turn_context is found before the offset.
+func readCodexModelAtOffset(
+	path string, offset int64,
+) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	lr := newLineReader(
+		io.LimitReader(f, offset), maxLineSize,
+	)
+	var model string
+	for {
+		line, ok := lr.next()
+		if !ok {
+			break
+		}
+		if !gjson.Valid(line) {
+			continue
+		}
+		if gjson.Get(line, "type").Str != codexTypeTurnContext {
+			continue
+		}
+		model = gjson.Get(line, "payload.model").Str
+	}
+	return model
 }
 
 // ParseCodexSessionFrom parses only new lines from a Codex
@@ -1051,6 +1185,7 @@ func ParseCodexSessionFrom(
 ) ([]ParsedMessage, time.Time, int64, error) {
 	b := newCodexSessionBuilder(includeExec)
 	b.ordinal = startOrdinal
+	b.currentModel = readCodexModelAtOffset(path, offset)
 	var fallbackErr error
 
 	consumed, err := readJSONLFrom(

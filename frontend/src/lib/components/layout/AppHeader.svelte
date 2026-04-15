@@ -8,7 +8,11 @@
   import { sessions } from "../../stores/sessions.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
   import { router } from "../../stores/router.svelte.js";
-  import { downloadExport } from "../../api/client.js";
+  import {
+    downloadExport,
+    getMarkdownExportUrl,
+  } from "../../api/client.js";
+  import { copyToClipboard } from "../../utils/clipboard.js";
   import ProjectTypeahead from "./ProjectTypeahead.svelte";
   import ImportModal from "../import/ImportModal.svelte";
 
@@ -17,14 +21,28 @@
 
   let showImportModal = $state(false);
   let showBlockFilter = $state(false);
+  let showExportMenu = $state(false);
   let showOverflow = $state(false);
+  let copiedMarkdownLink = $state(false);
+  let copiedMarkdownLinkTimer:
+    | ReturnType<typeof setTimeout>
+    | undefined;
+  let moreOpen = $state(false);
   let filterBtnRef: HTMLButtonElement | undefined =
     $state(undefined);
   let filterDropRef: HTMLDivElement | undefined =
     $state(undefined);
+  let exportBtnRef: HTMLButtonElement | undefined =
+    $state(undefined);
+  let exportDropRef: HTMLDivElement | undefined =
+    $state(undefined);
   let overflowBtnRef: HTMLButtonElement | undefined =
     $state(undefined);
   let overflowDropRef: HTMLDivElement | undefined =
+    $state(undefined);
+  let moreBtnRef: HTMLButtonElement | undefined =
+    $state(undefined);
+  let moreDropRef: HTMLDivElement | undefined =
     $state(undefined);
 
   const BLOCK_LABELS: Record<BlockType, string> = {
@@ -53,6 +71,23 @@
     }
   }
 
+  async function handleCopyMarkdownExportLink() {
+    if (!sessions.activeSessionId) return;
+    const url = new URL(
+      getMarkdownExportUrl(sessions.activeSessionId),
+      window.location.origin,
+    ).toString();
+    const ok = await copyToClipboard(url);
+    if (!ok) return;
+    copiedMarkdownLink = true;
+    clearTimeout(copiedMarkdownLinkTimer);
+    copiedMarkdownLinkTimer = setTimeout(() => {
+      copiedMarkdownLink = false;
+    }, 1500);
+    showExportMenu = false;
+    showOverflow = false;
+  }
+
   const hasActiveSession = $derived(
     sessions.activeSessionId !== null,
   );
@@ -68,6 +103,27 @@
       )
         return;
       showBlockFilter = false;
+    }
+    document.addEventListener("click", onClickOutside, true);
+    return () =>
+      document.removeEventListener(
+        "click",
+        onClickOutside,
+        true,
+      );
+  });
+
+  // Close export menu on outside click
+  $effect(() => {
+    if (!showExportMenu) return;
+    function onClickOutside(e: MouseEvent) {
+      const target = e.target as Node;
+      if (
+        exportBtnRef?.contains(target) ||
+        exportDropRef?.contains(target)
+      )
+        return;
+      showExportMenu = false;
     }
     document.addEventListener("click", onClickOutside, true);
     return () =>
@@ -97,6 +153,33 @@
         onClickOutside,
         true,
       );
+  });
+
+  // Close More dropdown on outside click or Escape
+  $effect(() => {
+    if (!moreOpen) return;
+    function onClickOutside(e: MouseEvent) {
+      const target = e.target as Node;
+      if (
+        moreBtnRef?.contains(target) ||
+        moreDropRef?.contains(target)
+      )
+        return;
+      moreOpen = false;
+    }
+    function onKeydown(e: KeyboardEvent) {
+      if (e.key === "Escape") moreOpen = false;
+    }
+    document.addEventListener("click", onClickOutside, true);
+    document.addEventListener("keydown", onKeydown);
+    return () => {
+      document.removeEventListener(
+        "click",
+        onClickOutside,
+        true,
+      );
+      document.removeEventListener("keydown", onKeydown);
+    };
   });
 </script>
 
@@ -155,44 +238,51 @@
 
     <button
       class="nav-btn"
-      class:active={router.route === "pinned"}
-      onclick={() => router.navigate("pinned")}
-      title="Pinned Messages"
-      aria-label="Pinned"
+      class:active={router.route === "usage"}
+      onclick={() => router.navigate("usage")}
+      title="Token Usage"
+      aria-label="Usage"
     >
       <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-        <path d="M4.146.146A.5.5 0 014.5 0h7a.5.5 0 01.5.5c0 .68-.342 1.174-.646 1.479-.126.125-.25.224-.354.298v4.431l.078.048c.203.127.476.314.751.555C12.36 7.775 13 8.527 13 9.5a.5.5 0 01-.5.5H8.5v5.5a.5.5 0 01-1 0V10H3.5a.5.5 0 01-.5-.5c0-.973.64-1.725 1.17-2.189A6 6 0 015 6.708V2.277a3 3 0 01-.354-.298C4.342 1.674 4 1.179 4 .5a.5.5 0 01.146-.354z"/>
+        <path d="M1 2.5A1.5 1.5 0 012.5 1h3A1.5 1.5 0 017 2.5v3A1.5 1.5 0 015.5 7h-3A1.5 1.5 0 011 5.5v-3zM2.5 2a.5.5 0 00-.5.5v3a.5.5 0 00.5.5h3a.5.5 0 00.5-.5v-3a.5.5 0 00-.5-.5h-3zm6.5.5A1.5 1.5 0 0110.5 1h3A1.5 1.5 0 0115 2.5v3A1.5 1.5 0 0113.5 7h-3A1.5 1.5 0 019 5.5v-3zm1.5-.5a.5.5 0 00-.5.5v3a.5.5 0 00.5.5h3a.5.5 0 00.5-.5v-3a.5.5 0 00-.5-.5h-3zM1 10.5A1.5 1.5 0 012.5 9h3A1.5 1.5 0 017 10.5v3A1.5 1.5 0 015.5 15h-3A1.5 1.5 0 011 13.5v-3zm1.5-.5a.5.5 0 00-.5.5v3a.5.5 0 00.5.5h3a.5.5 0 00.5-.5v-3a.5.5 0 00-.5-.5h-3zm6.5.5A1.5 1.5 0 0110.5 9h3a1.5 1.5 0 011.5 1.5v3a1.5 1.5 0 01-1.5 1.5h-3A1.5 1.5 0 019 13.5v-3zm1.5-.5a.5.5 0 00-.5.5v3a.5.5 0 00.5.5h3a.5.5 0 00.5-.5v-3a.5.5 0 00-.5-.5h-3z"/>
       </svg>
-      <span class="nav-label">Pinned</span>
+      <span class="nav-label">Usage</span>
     </button>
 
-    <button
-      class="nav-btn"
-      class:active={router.route === "insights"}
-      onclick={() => router.navigate("insights")}
-      title="Insights"
-      aria-label="Insights"
-    >
-      <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-        <path d="M14.5 3a.5.5 0 01.5.5v9a.5.5 0 01-.5.5h-13a.5.5 0 01-.5-.5v-9a.5.5 0 01.5-.5h13zm-13-1A1.5 1.5 0 000 3.5v9A1.5 1.5 0 001.5 14h13a1.5 1.5 0 001.5-1.5v-9A1.5 1.5 0 0014.5 2h-13z"/>
-        <path d="M3 5.5a.5.5 0 01.5-.5h9a.5.5 0 010 1h-9a.5.5 0 01-.5-.5zM3 8a.5.5 0 01.5-.5h9a.5.5 0 010 1h-9A.5.5 0 013 8zm0 2.5a.5.5 0 01.5-.5h6a.5.5 0 010 1h-6a.5.5 0 01-.5-.5z"/>
-      </svg>
-      <span class="nav-label">Insights</span>
-    </button>
-
-    <button
-      class="nav-btn"
-      class:active={router.route === "trash"}
-      onclick={() => router.navigate("trash")}
-      title="Trash"
-      aria-label="Trash"
-    >
-      <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-        <path d="M5.5 5.5A.5.5 0 016 6v6a.5.5 0 01-1 0V6a.5.5 0 01.5-.5zm2.5 0a.5.5 0 01.5.5v6a.5.5 0 01-1 0V6a.5.5 0 01.5-.5zm3 .5a.5.5 0 00-1 0v6a.5.5 0 001 0V6z"/>
-        <path fill-rule="evenodd" d="M14.5 3a1 1 0 01-1 1H13v9a2 2 0 01-2 2H5a2 2 0 01-2-2V4h-.5a1 1 0 01-1-1V2a1 1 0 011-1H5.5l1-1h3l1 1h2.5a1 1 0 011 1v1zM4.118 4L4 4.059V13a1 1 0 001 1h6a1 1 0 001-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/>
-      </svg>
-      <span class="nav-label">Trash</span>
-    </button>
+    <div class="more-wrap">
+      <button
+        class="nav-btn"
+        class:active={router.route === "pinned" || router.route === "insights" || router.route === "trash" || moreOpen}
+        bind:this={moreBtnRef}
+        onclick={() => { moreOpen = !moreOpen; }}
+        aria-label="More navigation"
+        aria-expanded={moreOpen}
+      >
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <path d="M3 9.5a1.5 1.5 0 110-3 1.5 1.5 0 010 3zm5 0a1.5 1.5 0 110-3 1.5 1.5 0 010 3zm5 0a1.5 1.5 0 110-3 1.5 1.5 0 010 3z"/>
+        </svg>
+        <span class="nav-label">More</span>
+      </button>
+      {#if moreOpen}
+        <div class="more-dropdown" role="menu" bind:this={moreDropRef}>
+          <button class="more-item" role="menuitem"
+            class:active={router.route === "pinned"}
+            onclick={() => { router.navigate("pinned"); moreOpen = false; }}>
+            Pinned
+          </button>
+          <button class="more-item" role="menuitem"
+            class:active={router.route === "insights"}
+            onclick={() => { router.navigate("insights"); moreOpen = false; }}>
+            Insights
+          </button>
+          <button class="more-item" role="menuitem"
+            class:active={router.route === "trash"}
+            onclick={() => { router.navigate("trash"); moreOpen = false; }}>
+            Trash
+          </button>
+        </div>
+      {/if}
+    </div>
   </div>
 
   <button
@@ -328,18 +418,59 @@
         {/if}
       </button>
 
-      <button
-        class="header-btn collapsible"
-        onclick={handleExport}
-        disabled={!sessions.activeSessionId}
-        title="Export session (e)"
-        aria-label="Export session"
-      >
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-          <path d="M4.406 1.342A5.53 5.53 0 018 0c2.69 0 4.923 2 5.166 4.579C14.758 4.804 16 6.137 16 7.773 16 9.569 14.502 11 12.687 11H10a.5.5 0 010-1h2.688C13.979 10 15 8.988 15 7.773c0-1.216-1.02-2.228-2.313-2.228h-.5v-.5C12.188 2.825 10.328 1 8 1a4.53 4.53 0 00-2.941 1.1c-.757.652-1.153 1.438-1.153 2.055v.448l-.445.049C2.064 4.805 1 5.952 1 7.318 1 8.785 2.23 10 3.781 10H6a.5.5 0 010 1H3.781C1.708 11 0 9.366 0 7.318c0-1.763 1.266-3.223 2.942-3.593.143-.863.698-1.723 1.464-2.383z"/>
-          <path d="M7.646 4.146a.5.5 0 01.708 0l3 3a.5.5 0 01-.708.708L8.5 5.707V14.5a.5.5 0 01-1 0V5.707L5.354 7.854a.5.5 0 11-.708-.708l3-3z"/>
-        </svg>
-      </button>
+      <div class="export-wrap collapsible">
+        <button
+          class="header-btn"
+          bind:this={exportBtnRef}
+          onclick={() => {
+            showExportMenu = !showExportMenu;
+            showOverflow = false;
+          }}
+          disabled={!sessions.activeSessionId}
+          title="Export session options"
+          aria-label="Export session"
+          aria-expanded={showExportMenu}
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M4.406 1.342A5.53 5.53 0 018 0c2.69 0 4.923 2 5.166 4.579C14.758 4.804 16 6.137 16 7.773 16 9.569 14.502 11 12.687 11H10a.5.5 0 010-1h2.688C13.979 10 15 8.988 15 7.773c0-1.216-1.02-2.228-2.313-2.228h-.5v-.5C12.188 2.825 10.328 1 8 1a4.53 4.53 0 00-2.941 1.1c-.757.652-1.153 1.438-1.153 2.055v.448l-.445.049C2.064 4.805 1 5.952 1 7.318 1 8.785 2.23 10 3.781 10H6a.5.5 0 010 1H3.781C1.708 11 0 9.366 0 7.318c0-1.763 1.266-3.223 2.942-3.593.143-.863.698-1.723 1.464-2.383z"/>
+            <path d="M7.646 4.146a.5.5 0 01.708 0l3 3a.5.5 0 01-.708.708L8.5 5.707V14.5a.5.5 0 01-1 0V5.707L5.354 7.854a.5.5 0 11-.708-.708l3-3z"/>
+          </svg>
+        </button>
+
+        {#if showExportMenu}
+          <div class="export-dropdown" bind:this={exportDropRef}>
+            <button
+              class="overflow-item"
+              onclick={() => {
+                handleExport();
+                showExportMenu = false;
+              }}
+            >
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M4.406 1.342A5.53 5.53 0 018 0c2.69 0 4.923 2 5.166 4.579C14.758 4.804 16 6.137 16 7.773 16 9.569 14.502 11 12.687 11H10a.5.5 0 010-1h2.688C13.979 10 15 8.988 15 7.773c0-1.216-1.02-2.228-2.313-2.228h-.5v-.5C12.188 2.825 10.328 1 8 1a4.53 4.53 0 00-2.941 1.1c-.757.652-1.153 1.438-1.153 2.055v.448l-.445.049C2.064 4.805 1 5.952 1 7.318 1 8.785 2.23 10 3.781 10H6a.5.5 0 010 1H3.781C1.708 11 0 9.366 0 7.318c0-1.763 1.266-3.223 2.942-3.593.143-.863.698-1.723 1.464-2.383z"/>
+                <path d="M7.646 4.146a.5.5 0 01.708 0l3 3a.5.5 0 01-.708.708L8.5 5.707V14.5a.5.5 0 01-1 0V5.707L5.354 7.854a.5.5 0 11-.708-.708l3-3z"/>
+              </svg>
+              <span>Download HTML export</span>
+            </button>
+            <button
+              class="overflow-item"
+              onclick={handleCopyMarkdownExportLink}
+            >
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M4.5 2A2.5 2.5 0 002 4.5v7A2.5 2.5 0 004.5 14h5A2.5 2.5 0 0012 11.5v-1a.5.5 0 011 0v1A3.5 3.5 0 019.5 15h-5A3.5 3.5 0 011 11.5v-7A3.5 3.5 0 014.5 1h1a.5.5 0 010 1h-1z"/>
+                <path d="M6.854 1.146a.5.5 0 010 .708L5.707 3H11.5A3.5 3.5 0 0115 6.5v5a3.5 3.5 0 01-3.5 3.5h-1a.5.5 0 010-1h1A2.5 2.5 0 0014 11.5v-5A2.5 2.5 0 0011.5 4H5.707l1.147 1.146a.5.5 0 11-.708.708l-2-2a.5.5 0 010-.708l2-2a.5.5 0 01.708 0z"/>
+              </svg>
+              <span>
+                {#if copiedMarkdownLink}
+                  Copied markdown link
+                {:else}
+                  Copy markdown export link
+                {/if}
+              </span>
+            </button>
+          </div>
+        {/if}
+      </div>
 
       <button
         class="header-btn collapsible"
@@ -395,7 +526,23 @@
                 <path d="M4.406 1.342A5.53 5.53 0 018 0c2.69 0 4.923 2 5.166 4.579C14.758 4.804 16 6.137 16 7.773 16 9.569 14.502 11 12.687 11H10a.5.5 0 010-1h2.688C13.979 10 15 8.988 15 7.773c0-1.216-1.02-2.228-2.313-2.228h-.5v-.5C12.188 2.825 10.328 1 8 1a4.53 4.53 0 00-2.941 1.1c-.757.652-1.153 1.438-1.153 2.055v.448l-.445.049C2.064 4.805 1 5.952 1 7.318 1 8.785 2.23 10 3.781 10H6a.5.5 0 010 1H3.781C1.708 11 0 9.366 0 7.318c0-1.763 1.266-3.223 2.942-3.593.143-.863.698-1.723 1.464-2.383z"/>
                 <path d="M7.646 4.146a.5.5 0 01.708 0l3 3a.5.5 0 01-.708.708L8.5 5.707V14.5a.5.5 0 01-1 0V5.707L5.354 7.854a.5.5 0 11-.708-.708l3-3z"/>
               </svg>
-              <span>Export session</span>
+              <span>Download HTML export</span>
+            </button>
+            <button
+              class="overflow-item"
+              onclick={handleCopyMarkdownExportLink}
+            >
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M4.5 2A2.5 2.5 0 002 4.5v7A2.5 2.5 0 004.5 14h5A2.5 2.5 0 0012 11.5v-1a.5.5 0 011 0v1A3.5 3.5 0 019.5 15h-5A3.5 3.5 0 011 11.5v-7A3.5 3.5 0 014.5 1h1a.5.5 0 010 1h-1z"/>
+                <path d="M6.854 1.146a.5.5 0 010 .708L5.707 3H11.5A3.5 3.5 0 0115 6.5v5a3.5 3.5 0 01-3.5 3.5h-1a.5.5 0 010-1h1A2.5 2.5 0 0014 11.5v-5A2.5 2.5 0 0011.5 4H5.707l1.147 1.146a.5.5 0 11-.708.708l-2-2a.5.5 0 010-.708l2-2a.5.5 0 01.708 0z"/>
+              </svg>
+              <span>
+                {#if copiedMarkdownLink}
+                  Copied markdown link
+                {:else}
+                  Copy markdown export link
+                {/if}
+              </span>
             </button>
             <button
               class="overflow-item"
@@ -560,6 +707,49 @@
       var(--accent-blue) 8%,
       transparent
     );
+  }
+
+  .more-wrap {
+    position: relative;
+  }
+
+  .more-dropdown {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    min-width: 140px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-md);
+    display: flex;
+    flex-direction: column;
+    padding: 4px;
+    z-index: 20;
+    animation: dropdown-in 0.12s ease-out;
+  }
+
+  .more-item {
+    padding: 6px 10px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    border-radius: var(--radius-sm);
+    text-align: left;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    transition: background 0.08s, color 0.08s;
+  }
+
+  .more-item:hover {
+    background: var(--bg-surface-hover);
+    color: var(--text-primary);
+  }
+
+  .more-item.active {
+    color: var(--text-primary);
+    font-weight: 500;
+    background: var(--bg-inset);
   }
 
   .search-hint {
@@ -849,6 +1039,27 @@
     flex-shrink: 0;
   }
 
+  .export-wrap {
+    position: relative;
+    display: flex;
+  }
+
+  .export-dropdown {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 4px;
+    width: 220px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-lg);
+    padding: 4px 0;
+    z-index: 100;
+    animation: dropdown-in 0.12s ease-out;
+    transform-origin: top right;
+  }
+
   @keyframes spin {
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }
@@ -939,7 +1150,8 @@
 
   /* 767px: Hide nav buttons and typeahead */
   @media (max-width: 767px) {
-    .header-left .nav-btn {
+    .header-left .nav-btn,
+    .header-left .more-wrap {
       display: none;
     }
 

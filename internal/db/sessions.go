@@ -608,6 +608,7 @@ func (db *DB) GetChildSessions(
 ) ([]Session, error) {
 	query := "SELECT " + sessionBaseCols +
 		" FROM sessions WHERE parent_session_id = ?" +
+		" AND deleted_at IS NULL" +
 		" ORDER BY started_at"
 	rows, err := db.getReader().QueryContext(ctx, query, parentID)
 	if err != nil {

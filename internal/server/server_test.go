@@ -1950,6 +1950,138 @@ func TestExportSession_NotFound(t *testing.T) {
 	assertStatus(t, w, http.StatusNotFound)
 }
 
+func TestMarkdownSessionExport(t *testing.T) {
+	te := setup(t)
+	te.seedSession(t, "s1", "my-app", 3)
+	te.seedMessages(t, "s1", 3)
+
+	w := te.get(t, "/api/v1/sessions/s1/md")
+	assertStatus(t, w, http.StatusOK)
+
+	ct := w.Header().Get("Content-Type")
+	if !strings.Contains(ct, "text/markdown") {
+		t.Fatalf("expected text/markdown content type, got %q", ct)
+	}
+	cd := w.Header().Get("Content-Disposition")
+	if !strings.Contains(cd, "inline") {
+		t.Fatalf("expected inline disposition, got %q", cd)
+	}
+	assertBodyContains(t, w, "# Session: my-app")
+}
+
+func TestMarkdownSessionExport_NotFound(t *testing.T) {
+	te := setup(t)
+
+	w := te.get(t, "/api/v1/sessions/nonexistent/md")
+	assertStatus(t, w, http.StatusNotFound)
+}
+
+func TestMarkdownSessionExport_InvalidDepth(t *testing.T) {
+	te := setup(t)
+	te.seedSession(t, "s1", "my-app", 1)
+
+	w := te.get(t, "/api/v1/sessions/s1/md?depth=2")
+	assertStatus(t, w, http.StatusBadRequest)
+}
+
+func TestMarkdownSessionExport_DepthOneIncludesChildSessions(t *testing.T) {
+	te := setup(t)
+	te.seedSession(t, "parent", "my-app", 1)
+	te.seedMessages(t, "parent", 1, func(i int, m *db.Message) {
+		m.Role = "assistant"
+		m.Content = "[Task]\nchild work"
+		m.HasToolUse = true
+		m.ToolCalls = []db.ToolCall{{
+			ToolName:          "Task",
+			Category:          "Task",
+			ToolUseID:         "toolu_child",
+			InputJSON:         `{"prompt":"inspect child"}`,
+			SubagentSessionID: "child-a",
+		}}
+	})
+	te.seedSession(t, "child-a", "my-app", 1, func(s *db.Session) {
+		s.ParentSessionID = dbtest.Ptr("parent")
+		s.RelationshipType = "subagent"
+	})
+	te.seedMessages(t, "child-a", 1)
+
+	w := te.get(t, "/api/v1/sessions/parent/md?depth=1")
+	assertStatus(t, w, http.StatusOK)
+	assertBodyContains(t, w, `<subagent_anchor session_id="child-a" tool_call_id="toolu_child" depth="1">`)
+	assertBodyContains(t, w, `<subagent_session id="child-a" parent_session_id="parent" relationship="subagent"`)
+}
+
+func TestMarkdownSessionExport_DefaultOmitsChildSessions(t *testing.T) {
+	te := setup(t)
+	te.seedSession(t, "parent", "my-app", 1)
+	te.seedMessages(t, "parent", 1, func(i int, m *db.Message) {
+		m.Role = "assistant"
+		m.Content = "[Task]\nchild work"
+		m.HasToolUse = true
+		m.ToolCalls = []db.ToolCall{{
+			ToolName:          "Task",
+			Category:          "Task",
+			ToolUseID:         "toolu_child",
+			InputJSON:         `{"prompt":"inspect child"}`,
+			SubagentSessionID: "child-a",
+		}}
+	})
+	te.seedSession(t, "child-a", "my-app", 1, func(s *db.Session) {
+		s.ParentSessionID = dbtest.Ptr("parent")
+		s.RelationshipType = "subagent"
+	})
+	te.seedMessages(t, "child-a", 1)
+
+	w := te.get(t, "/api/v1/sessions/parent/md")
+	assertStatus(t, w, http.StatusOK)
+	if strings.Contains(w.Body.String(), `<subagent_session id="child-a"`) {
+		t.Fatalf("expected default markdown export to omit child session, got:\n%s", w.Body.String())
+	}
+}
+
+func TestMarkdownSessionExport_DepthAllRecurses(t *testing.T) {
+	te := setup(t)
+	te.seedSession(t, "root", "my-app", 1)
+	te.seedMessages(t, "root", 1, func(i int, m *db.Message) {
+		m.Role = "assistant"
+		m.Content = "[Task]\nchild work"
+		m.HasToolUse = true
+		m.ToolCalls = []db.ToolCall{{
+			ToolName:          "Task",
+			Category:          "Task",
+			ToolUseID:         "toolu_child",
+			InputJSON:         `{"prompt":"inspect child"}`,
+			SubagentSessionID: "child-a",
+		}}
+	})
+	te.seedSession(t, "child-a", "my-app", 1, func(s *db.Session) {
+		s.ParentSessionID = dbtest.Ptr("root")
+		s.RelationshipType = "subagent"
+	})
+	te.seedMessages(t, "child-a", 1, func(i int, m *db.Message) {
+		m.Role = "assistant"
+		m.Content = "[Task]\ngrandchild work"
+		m.HasToolUse = true
+		m.ToolCalls = []db.ToolCall{{
+			ToolName:          "Task",
+			Category:          "Task",
+			ToolUseID:         "toolu_grandchild",
+			InputJSON:         `{"prompt":"inspect grandchild"}`,
+			SubagentSessionID: "child-b",
+		}}
+	})
+	te.seedSession(t, "child-b", "my-app", 1, func(s *db.Session) {
+		s.ParentSessionID = dbtest.Ptr("child-a")
+		s.RelationshipType = "subagent"
+	})
+	te.seedMessages(t, "child-b", 1)
+
+	w := te.get(t, "/api/v1/sessions/root/md?depth=all")
+	assertStatus(t, w, http.StatusOK)
+	assertBodyContains(t, w, `<subagent_session id="child-a" parent_session_id="root" relationship="subagent"`)
+	assertBodyContains(t, w, `<subagent_session id="child-b" parent_session_id="child-a" relationship="subagent"`)
+}
+
 func TestPublishSession_NoToken(t *testing.T) {
 	te := setup(t)
 	te.seedSession(t, "s1", "my-app", 3)

@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 // runPiParserTest creates a temp file with the given JSONL content and
@@ -527,4 +528,161 @@ func TestParsePiSession_ErrorCases(t *testing.T) {
 		assert.Equal(t, "pi:ws-sess", sess.ID)
 		assert.Len(t, msgs, 1)
 	})
+}
+
+// TestParsePiSession_TokenUsageFromFixture verifies that assistant
+// messages in the standard pi fixture get Model and TokenUsage
+// populated from the inline message.model and message.usage fields.
+// Without this, the usage dashboard reports $0 for pi sessions.
+func TestParsePiSession_TokenUsageFromFixture(t *testing.T) {
+	fixturePath := createTestFile(
+		t, "pi-session.jsonl",
+		loadFixture(t, "pi/session.jsonl"),
+	)
+	sess, msgs, err := ParsePiSession(fixturePath, "", "local")
+	require.NoError(t, err)
+
+	var assistants []ParsedMessage
+	for _, m := range msgs {
+		if m.Role == RoleAssistant {
+			assistants = append(assistants, m)
+		}
+	}
+	require.GreaterOrEqual(t, len(assistants), 2,
+		"fixture has at least two assistant messages")
+
+	for i, m := range assistants {
+		assert.Equal(t, "claude-opus-4-5", m.Model,
+			"assistant[%d] model populated from message.model", i)
+		require.NotEmpty(t, m.TokenUsage,
+			"assistant[%d] TokenUsage populated from message.usage", i)
+	}
+
+	// Fixture: entry-2 input=100,output=50; entry-7 input=200,output=10.
+	wantInputs := []int64{100, 200}
+	wantOutputs := []int64{50, 10}
+	for i, m := range assistants[:2] {
+		gotIn := gjson.GetBytes(m.TokenUsage, "input_tokens").Int()
+		gotOut := gjson.GetBytes(m.TokenUsage, "output_tokens").Int()
+		assert.Equal(t, wantInputs[i], gotIn,
+			"assistant[%d] input_tokens", i)
+		assert.Equal(t, wantOutputs[i], gotOut,
+			"assistant[%d] output_tokens", i)
+	}
+
+	// Session totals roll up from per-message HasOutputTokens.
+	assert.True(t, sess.HasTotalOutputTokens,
+		"session has rolled up output tokens")
+	assert.Equal(t, 60, sess.TotalOutputTokens,
+		"session TotalOutputTokens = 50 + 10")
+	assert.True(t, sess.HasPeakContextTokens,
+		"session has rolled up context tokens")
+	assert.Equal(t, 200, sess.PeakContextTokens,
+		"session PeakContextTokens = max(100, 200)")
+}
+
+// TestParsePiSession_ModelFromModelChange verifies that when an
+// assistant message has no inline model field, the parser falls
+// back to the most recent model_change entry's modelId.
+func TestParsePiSession_ModelFromModelChange(t *testing.T) {
+	header := `{"type":"session","id":"mc-sess","timestamp":"2025-01-01T10:00:00Z","cwd":"/tmp"}` + "\n"
+	mc := `{"type":"model_change","id":"mc1","timestamp":"2025-01-01T10:00:00.5Z","provider":"openai","modelId":"gpt-5.4"}` + "\n"
+	user := `{"type":"message","id":"u1","timestamp":"2025-01-01T10:00:01Z","message":{"role":"user","content":"hi"}}` + "\n"
+	// Assistant without inline model — should inherit from model_change.
+	asst := `{"type":"message","id":"a1","timestamp":"2025-01-01T10:00:02Z","message":{"role":"assistant","content":[{"type":"text","text":"ok"}],"usage":{"input":10,"output":5}}}`
+
+	_, msgs := runPiParserTest(t, header+mc+user+asst)
+
+	var asstMsg *ParsedMessage
+	for i := range msgs {
+		if msgs[i].Role == RoleAssistant {
+			asstMsg = &msgs[i]
+			break
+		}
+	}
+	require.NotNil(t, asstMsg, "assistant message present")
+	assert.Equal(t, "gpt-5.4", asstMsg.Model,
+		"assistant model inherited from prior model_change")
+	require.NotEmpty(t, asstMsg.TokenUsage,
+		"token usage extracted from message.usage")
+}
+
+// TestParsePiSession_UnknownUsageShape verifies that a present
+// but unrecognized usage object (empty {} or a foreign schema
+// with none of the keys we know about) leaves TokenUsage empty
+// so the usage query filter skips the row, rather than
+// fabricating a zero-valued record.
+func TestParsePiSession_UnknownUsageShape(t *testing.T) {
+	header := `{"type":"session","id":"uu-sess","timestamp":"2025-01-01T10:00:00Z","cwd":"/tmp"}` + "\n"
+
+	cases := []struct {
+		name     string
+		usageRaw string
+	}{
+		{"empty object", `{}`},
+		{"foreign keys only", `{"totalTokens":42,"promptCount":3}`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			asst := `{"type":"message","id":"a1","timestamp":"2025-01-01T10:00:01Z","message":{"role":"assistant","content":"hi","model":"gpt-5.4","usage":` + tc.usageRaw + `}}`
+			_, msgs := runPiParserTest(t, header+asst)
+			require.Len(t, msgs, 1)
+			m := msgs[0]
+
+			assert.Equal(t, "gpt-5.4", m.Model,
+				"model still populated from message.model")
+			assert.Empty(t, m.TokenUsage,
+				"unrecognized usage shape must leave TokenUsage empty")
+			assert.False(t, m.HasOutputTokens)
+			assert.False(t, m.HasContextTokens)
+		})
+	}
+}
+
+// TestParsePiSession_ZeroUsage verifies that an explicit usage
+// block with every counter at zero is preserved as "known
+// zero" rather than collapsed to "unknown". The normalized
+// token_usage is still written and coverage flags follow field
+// presence, matching the claude parser contract and letting
+// downstream rollups distinguish an errored request from a
+// missing usage blob.
+func TestParsePiSession_ZeroUsage(t *testing.T) {
+	header := `{"type":"session","id":"zu-sess","timestamp":"2025-01-01T10:00:00Z","cwd":"/tmp"}` + "\n"
+	asst := `{"type":"message","id":"a1","timestamp":"2025-01-01T10:00:01Z","message":{"role":"assistant","content":"oops","model":"gpt-5.4","usage":{"input":0,"output":0}}}`
+
+	_, msgs := runPiParserTest(t, header+asst)
+	require.Len(t, msgs, 1)
+	m := msgs[0]
+
+	assert.Equal(t, "gpt-5.4", m.Model)
+	require.NotEmpty(t, m.TokenUsage,
+		"zero-valued usage object must still write token_usage")
+
+	assert.Equal(t, int64(0),
+		gjson.GetBytes(m.TokenUsage, "input_tokens").Int())
+	assert.Equal(t, int64(0),
+		gjson.GetBytes(m.TokenUsage, "output_tokens").Int())
+
+	assert.True(t, m.HasOutputTokens,
+		"output field present => HasOutputTokens true even at zero")
+	assert.True(t, m.HasContextTokens,
+		"input field present => HasContextTokens true even at zero")
+	assert.Equal(t, 0, m.OutputTokens)
+	assert.Equal(t, 0, m.ContextTokens)
+}
+
+// TestParsePiSession_NoUsageNoTokenUsage verifies that messages
+// without a usage block do not write an empty token_usage row,
+// since the eligibility filter requires token_usage != ”.
+func TestParsePiSession_NoUsageNoTokenUsage(t *testing.T) {
+	header := `{"type":"session","id":"nu-sess","timestamp":"2025-01-01T10:00:00Z","cwd":"/tmp"}` + "\n"
+	asst := `{"type":"message","id":"a1","timestamp":"2025-01-01T10:00:01Z","message":{"role":"assistant","content":"hello","model":"claude-opus-4-5"}}`
+
+	_, msgs := runPiParserTest(t, header+asst)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, "claude-opus-4-5", msgs[0].Model,
+		"model still populated even when usage missing")
+	assert.Empty(t, msgs[0].TokenUsage,
+		"token usage left empty when message.usage absent")
 }

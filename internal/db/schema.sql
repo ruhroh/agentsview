@@ -44,6 +44,8 @@ CREATE TABLE IF NOT EXISTS messages (
     output_tokens INTEGER NOT NULL DEFAULT 0,
     has_context_tokens INTEGER NOT NULL DEFAULT 0,
     has_output_tokens INTEGER NOT NULL DEFAULT 0,
+    claude_message_id TEXT NOT NULL DEFAULT '',
+    claude_request_id TEXT NOT NULL DEFAULT '',
     UNIQUE(session_id, ordinal)
 );
 
@@ -216,6 +218,15 @@ CREATE TABLE IF NOT EXISTS skipped_files (
     file_mtime INTEGER NOT NULL
 );
 
+-- Remote skip cache: tracks file mtimes per remote host
+-- for SSH sync incremental optimization.
+CREATE TABLE IF NOT EXISTS remote_skipped_files (
+    host       TEXT NOT NULL,
+    path       TEXT NOT NULL,
+    file_mtime INTEGER NOT NULL,
+    PRIMARY KEY (host, path)
+);
+
 -- PG sync state: stores watermarks for push sync
 CREATE TABLE IF NOT EXISTS pg_sync_state (
     key   TEXT PRIMARY KEY,
@@ -229,4 +240,15 @@ CREATE TABLE IF NOT EXISTS shared_sessions (
     server_url TEXT NOT NULL,
     shared_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+-- Model pricing for cost calculation
+CREATE TABLE IF NOT EXISTS model_pricing (
+    model_pattern    TEXT PRIMARY KEY,
+    input_per_mtok   REAL NOT NULL DEFAULT 0,
+    output_per_mtok  REAL NOT NULL DEFAULT 0,
+    cache_creation_per_mtok REAL NOT NULL DEFAULT 0,
+    cache_read_per_mtok     REAL NOT NULL DEFAULT 0,
+    updated_at       TEXT NOT NULL
+        DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );

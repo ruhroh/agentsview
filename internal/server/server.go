@@ -176,6 +176,9 @@ func (s *Server) routes() {
 		"GET /api/v1/sessions/{id}/export", http.HandlerFunc(s.handleExportSession),
 	)
 	s.mux.Handle(
+		"GET /api/v1/sessions/{id}/md", http.HandlerFunc(s.handleMarkdownSession),
+	)
+	s.mux.Handle(
 		"POST /api/v1/sessions/{id}/publish", s.withTimeout(s.handlePublishSession),
 	)
 	s.mux.Handle(
@@ -197,6 +200,11 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /api/v1/analytics/velocity", s.withTimeout(s.handleAnalyticsVelocity))
 	s.mux.Handle("GET /api/v1/analytics/tools", s.withTimeout(s.handleAnalyticsTools))
 	s.mux.Handle("GET /api/v1/analytics/top-sessions", s.withTimeout(s.handleAnalyticsTopSessions))
+
+	s.mux.Handle("GET /api/v1/usage/summary",
+		s.withTimeout(s.handleUsageSummary))
+	s.mux.Handle("GET /api/v1/usage/top-sessions",
+		s.withTimeout(s.handleUsageTopSessions))
 
 	s.mux.Handle("GET /api/v1/insights", s.withTimeout(s.handleListInsights))
 	s.mux.Handle("GET /api/v1/insights/{id}", s.withTimeout(s.handleGetInsight))

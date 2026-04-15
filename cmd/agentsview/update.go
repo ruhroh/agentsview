@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -12,31 +11,20 @@ import (
 	"github.com/wesm/agentsview/internal/update"
 )
 
-func runUpdate(args []string) {
-	fs := flag.NewFlagSet("update", flag.ExitOnError)
-	check := fs.Bool("check", false,
-		"Check for updates without installing")
-	yes := fs.Bool("yes", false,
-		"Install without confirmation prompt")
-	force := fs.Bool("force", false,
-		"Force check (ignore cache)")
-	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(),
-			"Usage: agentsview update [flags]")
-		fmt.Fprintln(fs.Output(), "\nFlags:")
-		fs.PrintDefaults()
-	}
-	if err := fs.Parse(args); err != nil {
-		log.Fatalf("parsing flags: %v", err)
-	}
+type UpdateConfig struct {
+	Check bool
+	Yes   bool
+	Force bool
+}
 
+func runUpdate(cfg UpdateConfig) {
 	dataDir, err := config.ResolveDataDir()
 	if err != nil {
 		log.Fatalf("resolving data dir: %v", err)
 	}
 
 	info, err := update.CheckForUpdate(
-		version, *force, dataDir,
+		version, cfg.Force, dataDir,
 	)
 	if err != nil {
 		log.Fatalf("checking for updates: %v", err)
@@ -55,7 +43,7 @@ func runUpdate(args []string) {
 				"Latest release: %s\n",
 			info.CurrentVersion, info.LatestVersion,
 		)
-		if *check {
+		if cfg.Check {
 			return
 		}
 		// Cache-only results lack download metadata; re-fetch.
@@ -82,12 +70,12 @@ func runUpdate(args []string) {
 			)
 		}
 		fmt.Println()
-		if *check {
+		if cfg.Check {
 			return
 		}
 	}
 
-	if !*yes {
+	if !cfg.Yes {
 		fmt.Print("Install update? [y/N] ")
 		reader := bufio.NewReader(os.Stdin)
 		answer, _ := reader.ReadString('\n')
