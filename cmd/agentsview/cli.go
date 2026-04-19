@@ -34,7 +34,7 @@ func newRootCommand() *cobra.Command {
 				printVersion(cmd.OutOrStdout())
 				return
 			}
-			runServe(mustLoadConfig(cmd))
+			_ = cmd.Help()
 		},
 	}
 	root.AddGroup(
@@ -46,7 +46,6 @@ func newRootCommand() *cobra.Command {
 	root.SetCompletionCommandGroupID(groupMeta)
 	root.SetHelpCommandGroupID(groupMeta)
 
-	config.RegisterServePFlags(root.Flags())
 	root.Flags().BoolVarP(
 		&showVersion,
 		"version",

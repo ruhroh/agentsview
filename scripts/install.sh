@@ -195,7 +195,7 @@ main() {
     fi
 
     echo "Get started:"
-    echo "  agentsview          # Start the server and open browser"
+    echo "  agentsview serve    # Start the server and open browser"
     echo "  agentsview update   # Check for and install updates"
 }
 

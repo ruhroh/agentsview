@@ -225,7 +225,7 @@ function Install-Agentsview {
         }
 
         Write-Host "Get started:"
-        Write-Host "  agentsview          # Start the server and open browser"
+        Write-Host "  agentsview serve    # Start the server and open browser"
         Write-Host "  agentsview update   # Check for and install updates"
 
     } finally {

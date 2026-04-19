@@ -41,11 +41,34 @@ func TestRootHelpShowsKeySectionsAndCommands(t *testing.T) {
 		"usage daily            Daily cost summary",
 		"completion             Generate the autocompletion script for the specified shell",
 		"Flags:",
-		"--host string",
-		"--port int",
+		"--version",
 	} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("help missing %q\n%s", want, help)
+		}
+	}
+	for _, unwanted := range []string{
+		"--host string",
+		"--port int",
+	} {
+		if strings.Contains(help, unwanted) {
+			t.Fatalf("root help should not include serve flag %q\n%s", unwanted, help)
+		}
+	}
+}
+
+func TestRootNoArgsShowsHelp(t *testing.T) {
+	out, err := executeCommand(newRootCommand())
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	for _, want := range []string{
+		"Usage:\n  agentsview [flags]\n  agentsview <command> [flags]",
+		"Core Commands:",
+		"serve                  Start server",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q\n%s", want, out)
 		}
 	}
 }

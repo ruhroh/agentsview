@@ -23,7 +23,7 @@ Or download the **desktop app** (macOS / Windows) from
 ## Quick Start
 
 ```bash
-agentsview                 # start server, open web UI
+agentsview serve           # start server, open web UI
 agentsview usage daily     # print daily cost summary
 ```
 
