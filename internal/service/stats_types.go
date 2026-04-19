@@ -1,0 +1,20 @@
+// internal/service/stats_types.go
+package service
+
+import "github.com/wesm/agentsview/internal/db"
+
+// StatsFilter mirrors the session-stats CLI flag set.
+type StatsFilter struct {
+	Since           string   `json:"since,omitempty"`
+	Until           string   `json:"until,omitempty"`
+	Agent           string   `json:"agent,omitempty"`
+	IncludeProjects []string `json:"include_projects,omitempty"`
+	ExcludeProjects []string `json:"exclude_projects,omitempty"`
+	Timezone        string   `json:"timezone,omitempty"`
+	GHToken         string   `json:"-"`
+}
+
+// SessionStats is the transport-neutral response type; currently just
+// an alias for db.SessionStats (the database package already carries
+// the full schema with json tags).
+type SessionStats = db.SessionStats

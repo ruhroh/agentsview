@@ -358,3 +358,24 @@ func (b *directBackend) Watch(
 	}()
 	return out, nil
 }
+
+// Stats delegates to db.GetSessionStats on the underlying *db.DB.
+// Requires a local *db.DB (not a generic db.Store) because the v1
+// stats computation reaches into SQLite-specific helpers; read-only
+// backends constructed via NewReadOnlyBackend return db.ErrReadOnly.
+func (b *directBackend) Stats(
+	ctx context.Context, f StatsFilter,
+) (*SessionStats, error) {
+	if b.local == nil {
+		return nil, db.ErrReadOnly
+	}
+	return b.local.GetSessionStats(ctx, db.StatsFilter{
+		Since:           f.Since,
+		Until:           f.Until,
+		Agent:           f.Agent,
+		IncludeProjects: f.IncludeProjects,
+		ExcludeProjects: f.ExcludeProjects,
+		Timezone:        f.Timezone,
+		GHToken:         f.GHToken,
+	})
+}

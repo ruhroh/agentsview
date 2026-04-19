@@ -154,6 +154,13 @@ CREATE TABLE IF NOT EXISTS tool_calls (
 
 CREATE INDEX IF NOT EXISTS idx_tool_calls_session
     ON tool_calls(session_id);
+-- idx_tool_calls_message backs the ON DELETE CASCADE from
+-- messages(id). Without it SQLite full-scans tool_calls per
+-- deleted message row, which makes ReplaceSessionMessages
+-- O(messages * tool_calls) and stalls sync once tool_calls
+-- grows large.
+CREATE INDEX IF NOT EXISTS idx_tool_calls_message
+    ON tool_calls(message_id);
 CREATE INDEX IF NOT EXISTS idx_tool_calls_category
     ON tool_calls(category);
 CREATE INDEX IF NOT EXISTS idx_tool_calls_skill
@@ -225,6 +232,12 @@ CREATE TABLE IF NOT EXISTS pinned_messages (
 
 CREATE INDEX IF NOT EXISTS idx_pinned_session
     ON pinned_messages(session_id);
+-- idx_pinned_message backs the ON DELETE CASCADE from messages(id).
+-- The UNIQUE(session_id, message_id) constraint creates an index
+-- ordered (session_id, message_id), which the FK lookup on
+-- message_id alone cannot use (leftmost-prefix rule).
+CREATE INDEX IF NOT EXISTS idx_pinned_message
+    ON pinned_messages(message_id);
 CREATE INDEX IF NOT EXISTS idx_pinned_created
     ON pinned_messages(created_at DESC);
 
@@ -272,4 +285,14 @@ CREATE TABLE IF NOT EXISTS model_pricing (
     cache_read_per_mtok     REAL NOT NULL DEFAULT 0,
     updated_at       TEXT NOT NULL
         DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+-- Git aggregation TTL cache: memoizes `git log --numstat` and
+-- `gh pr list` results per (repo, author, window) tuple so
+-- repeated `agentsview stats` invocations don't re-shell out.
+CREATE TABLE IF NOT EXISTS git_cache (
+    cache_key   TEXT PRIMARY KEY,          -- sha256(repo|author|since|until|kind)
+    kind        TEXT NOT NULL,             -- 'log' | 'pr'
+    payload     TEXT NOT NULL,             -- JSON-encoded result
+    computed_at TEXT NOT NULL              -- RFC3339
 );

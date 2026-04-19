@@ -20,6 +20,7 @@ type SessionService interface {
 	ToolCalls(ctx context.Context, id string) (*ToolCallList, error)
 	Sync(ctx context.Context, in SyncInput) (*SessionDetail, error)
 	Watch(ctx context.Context, id string) (<-chan Event, error)
+	Stats(ctx context.Context, f StatsFilter) (*SessionStats, error)
 }
 
 // SessionDetail mirrors the HTTP GetSession response shape: a

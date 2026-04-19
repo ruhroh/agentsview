@@ -258,6 +258,14 @@ func (b *httpBackend) Watch(
 	return out, nil
 }
 
+// Stats is not yet implemented over HTTP; the daemon currently has
+// no /stats endpoint. Subsequent tasks may add one.
+func (b *httpBackend) Stats(
+	_ context.Context, _ StatsFilter,
+) (*SessionStats, error) {
+	return nil, errors.New("stats over HTTP backend: not yet implemented")
+}
+
 // parseSSE reads a Server-Sent Events stream and invokes emit for
 // each complete event. emit returns false to stop parsing (e.g. on
 // context cancel).
