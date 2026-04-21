@@ -36,6 +36,7 @@ import type {
   TopUsageSessionsResponse,
   UsageParams,
   UsageTopSessionsParams,
+  ShareConfig,
 } from "./types.js";
 import type { SessionActivityResponse } from "./types/session-activity.js";
 
@@ -533,6 +534,23 @@ export function setGithubConfig(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ token }),
+  });
+}
+
+/* Share config */
+
+export function getShareConfig(): Promise<ShareConfig> {
+  return fetchJSON("/config/share");
+}
+
+export function setShareConfig(cfg: {
+  url?: string;
+  token?: string;
+}): Promise<ShareConfig> {
+  return fetchJSON("/config/share", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(cfg),
   });
 }
 

@@ -7,6 +7,7 @@
   import AgentDirSettings from "./AgentDirSettings.svelte";
   import TerminalSettings from "./TerminalSettings.svelte";
   import GithubSettings from "./GithubSettings.svelte";
+  import ShareSettings from "./ShareSettings.svelte";
   import RemoteSettings from "./RemoteSettings.svelte";
 
   let authTokenInput: string = $state("");
@@ -88,6 +89,7 @@
       <AgentDirSettings />
       <TerminalSettings />
       <GithubSettings />
+      <ShareSettings />
       <RemoteSettings />
 
       <div class="settings-actions">

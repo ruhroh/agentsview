@@ -150,17 +150,3 @@ container (see `.github/workflows/ci.yml`, `integration` job).
 - **Markdown formatting**: Use `mdformat --wrap 80` to format Markdown files.
   Requires the `mdformat-tables` plugin
   (`uv tool install mdformat --with mdformat-tables`).
-
-## Git Workflow
-
-- **Commit every turn** - always commit your work at the end of each turn, no
-  exceptions
-- **Never amend commits** - always create new commits for fixes, never use
-  `--amend`
-- **Never change branches** - don't create, switch, or delete branches without
-  explicit permission
-- Use conventional commit messages
-- Run tests before committing when applicable
-- Never push or pull unless explicitly asked
-- **PR descriptions**: summary only, no test plans or checklists. Describe what
-  the code does now, not how to test it.

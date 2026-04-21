@@ -113,3 +113,131 @@ func TestUnshareSession_Success(t *testing.T) {
 		t.Errorf("expected nil share after unshare, got %+v", share)
 	}
 }
+
+func TestGetShareConfig_Empty(t *testing.T) {
+	te := setup(t)
+	w := te.get(t, "/api/v1/config/share")
+	assertStatus(t, w, http.StatusOK)
+
+	resp := decode[struct {
+		Configured bool   `json:"configured"`
+		URL        string `json:"url"`
+		HasToken   bool   `json:"has_token"`
+	}](t, w)
+
+	if resp.Configured {
+		t.Error("expected configured=false with empty config")
+	}
+	if resp.URL != "" {
+		t.Errorf("expected empty URL, got %q", resp.URL)
+	}
+	if resp.HasToken {
+		t.Error("expected has_token=false")
+	}
+}
+
+func TestSetShareConfig_SaveAndGet(t *testing.T) {
+	te := setup(t)
+
+	w := te.post(t, "/api/v1/config/share",
+		`{"url":"https://share.example.com","token":"secret-token"}`)
+	assertStatus(t, w, http.StatusOK)
+
+	resp := decode[struct {
+		Configured bool   `json:"configured"`
+		URL        string `json:"url"`
+		HasToken   bool   `json:"has_token"`
+	}](t, w)
+
+	if !resp.Configured {
+		t.Error("expected configured=true after setting url+token")
+	}
+	if resp.URL != "https://share.example.com" {
+		t.Errorf("expected URL https://share.example.com, got %q", resp.URL)
+	}
+	if !resp.HasToken {
+		t.Error("expected has_token=true")
+	}
+
+	// GET should return the same state.
+	w2 := te.get(t, "/api/v1/config/share")
+	assertStatus(t, w2, http.StatusOK)
+	resp2 := decode[struct {
+		Configured bool   `json:"configured"`
+		URL        string `json:"url"`
+		HasToken   bool   `json:"has_token"`
+	}](t, w2)
+	if resp2.URL != "https://share.example.com" {
+		t.Errorf("GET after POST: expected URL https://share.example.com, got %q", resp2.URL)
+	}
+	if !resp2.HasToken {
+		t.Error("GET after POST: expected has_token=true")
+	}
+}
+
+func TestSetShareConfig_PartialUpdate(t *testing.T) {
+	te := setup(t)
+
+	// Set both fields initially.
+	te.post(t, "/api/v1/config/share",
+		`{"url":"https://share.example.com","token":"secret"}`)
+
+	// Update only URL (empty token should be skipped by SaveShareConfig).
+	w := te.post(t, "/api/v1/config/share",
+		`{"url":"https://new.example.com"}`)
+	assertStatus(t, w, http.StatusOK)
+
+	resp := decode[struct {
+		Configured bool   `json:"configured"`
+		URL        string `json:"url"`
+		HasToken   bool   `json:"has_token"`
+	}](t, w)
+
+	if resp.URL != "https://new.example.com" {
+		t.Errorf("expected updated URL, got %q", resp.URL)
+	}
+	if !resp.HasToken {
+		t.Error("expected has_token=true (token should be preserved)")
+	}
+}
+
+func TestSetShareConfig_TokenNotExposed(t *testing.T) {
+	te := setup(t)
+
+	te.post(t, "/api/v1/config/share",
+		`{"url":"https://share.example.com","token":"super-secret"}`)
+
+	w := te.get(t, "/api/v1/config/share")
+	assertStatus(t, w, http.StatusOK)
+
+	// The raw body must not contain the token value.
+	body := w.Body.String()
+	if contains := "super-secret"; len(body) > 0 {
+		for i := 0; i <= len(body)-len(contains); i++ {
+			if body[i:i+len(contains)] == contains {
+				t.Error("response body contains the raw token value")
+				break
+			}
+		}
+	}
+}
+
+func TestSetShareConfig_InvalidJSON(t *testing.T) {
+	te := setup(t)
+	w := te.post(t, "/api/v1/config/share", `{bad json`)
+	assertStatus(t, w, http.StatusBadRequest)
+}
+
+func TestSetShareConfig_TrailingSlashStripped(t *testing.T) {
+	te := setup(t)
+	w := te.post(t, "/api/v1/config/share",
+		`{"url":"https://share.example.com/","token":"tok"}`)
+	assertStatus(t, w, http.StatusOK)
+
+	resp := decode[struct {
+		URL string `json:"url"`
+	}](t, w)
+	if resp.URL != "https://share.example.com" {
+		t.Errorf("expected trailing slash stripped, got %q", resp.URL)
+	}
+}

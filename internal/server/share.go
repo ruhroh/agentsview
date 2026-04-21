@@ -8,8 +8,11 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
+	"github.com/wesm/agentsview/internal/config"
 	"github.com/wesm/agentsview/internal/db"
 )
 
@@ -301,4 +304,86 @@ func deleteShare(
 			resp.StatusCode, string(respBody))
 	}
 	return nil
+}
+
+// shareConfigResponse is the JSON shape for GET/POST /api/v1/config/share.
+type shareConfigResponse struct {
+	Configured bool   `json:"configured"`
+	URL        string `json:"url"`
+	HasToken   bool   `json:"has_token"`
+}
+
+func (s *Server) buildShareConfigResponse() shareConfigResponse {
+	share := s.cfg.Share
+	return shareConfigResponse{
+		Configured: share.URL != "" && share.Token != "",
+		URL:        share.URL,
+		HasToken:   share.Token != "",
+	}
+}
+
+func (s *Server) handleGetShareConfig(
+	w http.ResponseWriter, r *http.Request,
+) {
+	if !isLocalhostRequest(r) {
+		writeError(w, http.StatusForbidden,
+			"share config is only available from localhost")
+		return
+	}
+
+	s.mu.RLock()
+	resp := s.buildShareConfigResponse()
+	s.mu.RUnlock()
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleSetShareConfig(
+	w http.ResponseWriter, r *http.Request,
+) {
+	if !isLocalhostRequest(r) {
+		writeError(w, http.StatusForbidden,
+			"share config can only be modified from localhost")
+		return
+	}
+
+	var req struct {
+		URL   string `json:"url"`
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+
+	req.URL = strings.TrimSpace(req.URL)
+	req.URL = strings.TrimRight(req.URL, "/")
+	req.Token = strings.TrimSpace(req.Token)
+
+	if req.URL != "" {
+		if _, err := url.ParseRequestURI(req.URL); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid URL")
+			return
+		}
+	}
+
+	share := config.ShareConfig{
+		URL:   req.URL,
+		Token: req.Token,
+	}
+
+	s.mu.Lock()
+	err := s.cfg.SaveShareConfig(share)
+	s.mu.Unlock()
+	if err != nil {
+		log.Printf("save share config: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	s.mu.RLock()
+	resp := s.buildShareConfigResponse()
+	s.mu.RUnlock()
+
+	writeJSON(w, http.StatusOK, resp)
 }

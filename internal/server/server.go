@@ -228,6 +228,10 @@ func (s *Server) routes() {
 	s.mux.Handle(
 		"POST /api/v1/config/terminal", s.withTimeout(s.handleSetTerminalConfig),
 	)
+	s.mux.Handle("GET /api/v1/config/share", s.withTimeout(s.handleGetShareConfig))
+	s.mux.Handle(
+		"POST /api/v1/config/share", s.withTimeout(s.handleSetShareConfig),
+	)
 	s.mux.Handle("GET /api/v1/update/check", s.withTimeout(s.handleCheckUpdate))
 
 	s.mux.Handle("GET /api/v1/settings", s.withTimeout(s.handleGetSettings))
